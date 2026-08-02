@@ -206,13 +206,11 @@ def build_source_config(raw: dict, defaults: dict | None = None) -> SourceConfig
 
 
 def _build_web_config(raw: dict) -> WebConfig:
-    token = _env_override_optional_str("WEB_AUTH_TOKEN", raw.get("auth_token"))
-    if not token:
-        token = secrets.token_urlsafe(32)
-        logger.info(
-            "generated a new websocket auth token (none was configured) - "
-            "it'll be written back to config.yaml"
-        )
+    # not env-overridable (unlike the rest of this function) - it's
+    # generated once and self-healed into config.yaml purely so restarts
+    # don't invalidate every already-open browser tab's websocket
+    # connection, not meant to be hand-set or injected from outside
+    token = raw.get("auth_token") or secrets.token_urlsafe(32)
 
     return WebConfig(
         enabled=_env_override("WEB_ENABLED", bool(raw.get("enabled", WebConfig.enabled))),

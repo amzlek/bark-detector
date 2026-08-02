@@ -9,7 +9,8 @@
 # MQTT_USERNAME, MQTT_PASSWORD, MQTT_TOPIC, MQTT_CLIENT_ID). Same for
 # web.* (WEB_ENABLED/WEB_HOST/WEB_PORT), cleanup.* (CLEANUP_MAX_AGE_DAYS/
 # CLEANUP_MAX_SPACE_MB/CLEANUP_CHECK_INTERVAL_MINUTES), and snippet_dir/
-# ffmpeg_path/log_level (SNIPPET_DIR/FFMPEG_PATH/LOG_LEVEL).
+# ffmpeg_path/log_level (SNIPPET_DIR/FFMPEG_PATH/LOG_LEVEL). The one
+# exception is web.auth_token - see the comment above the web: section.
 mqtt:
   # defaults to false if omitted - this example turns it on since it's
   # showing a complete, working setup
@@ -30,7 +31,13 @@ snippet_dir: /media/bark_snippets
 
 log_level: INFO
 
-# event log + settings UI (add/edit/delete sources, change MQTT settings)
+# event log + settings UI (add/edit/delete sources, change MQTT settings).
+# There's a 4th field, auth_token, not shown here - it gates the websocket
+# that carries live status and all settings CRUD. Leave it out: the app
+# generates one itself on first boot and self-heals it into config.yaml,
+# the same way a missing source list or MQTT block would be. Unlike every
+# other field on this page it's NOT env-var overridable, and it's a
+# secret - don't share it or commit a config.yaml that has one.
 web:
   enabled: true
   host: 0.0.0.0

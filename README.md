@@ -26,18 +26,25 @@ dependency on Frigate's video/recording/app framework.
   - a notification when storage cleanup has to evict snippets to stay under
     its space cap
 - **Web UI** (Flask, no separate frontend build step):
-  - `/` - event log with an inline player per detection
+  - `/` - event log with an inline player per detection, plus a live status
+    panel (websocket connection, MQTT broker, per-source connectivity)
   - `/settings` - add/edit/delete sources (with a live connectivity badge
     and a "Test" button that probes a path before you save it), edit MQTT
     broker settings, and a small storage panel (recordings / space used /
     space available)
+  - live status and all settings CRUD (add/edit/delete source, update MQTT)
+    go over a websocket at `/ws`, gated by an auth token the app generates
+    itself and self-heals into `config.yaml` on first boot (see
+    `config.example.yaml`). Everything else - `/api/events`, `/api/sources`
+    (read-only), `/api/stats`, `/snippets/*` - stays plain, unauthenticated
+    HTTP
 - **Automatic retention**: age- and space-based cleanup of saved snippets,
   checked on an interval.
-- **Multi-arch, minimal image**: `python:3.14-slim` + a static ffmpeg binary
-  (no apt codec tree) + [ai-edge-litert](https://pypi.org/project/ai-edge-litert/)
-  (Google's official TFLite runtime, prebuilt wheels for both
-  `linux/amd64` and `linux/arm64`) - no TensorFlow, no Node/React build
-  stage.
+- **Minimal image**: `python:3.14-slim` + a static ffmpeg binary (no apt
+  codec tree) + [ai-edge-litert](https://pypi.org/project/ai-edge-litert/)
+  (Google's official TFLite runtime, prebuilt wheel) - no TensorFlow, no
+  Node/React build stage. `linux/amd64` only for now (see "Status / not yet
+  done" below).
 
 ## Quick start
 
@@ -73,17 +80,6 @@ Topics are all derived from a single configurable prefix, `mqtt.topic`
 | `bark_detector/{source}/event`         | a detection fires                      | no       |
 | `bark_detector/{source}/status`        | a source connects/disconnects          | yes      |
 | `bark_detector/system/{event}`         | e.g. `space_limit_reached` on cleanup  | no       |
-
-## Multi-arch build
-
-```bash
-docker buildx build --platform linux/amd64,linux/arm64 -t bark-detector:latest --push .
-```
-
-Only `linux/amd64` has actually been built and run end-to-end so far (see
-`test-rig/`); the `linux/arm64` image builds against the same multi-arch
-`ai-edge-litert`/ffmpeg base but hasn't been verified on real ARM hardware
-yet.
 
 ## Local test rig
 
@@ -135,7 +131,8 @@ Want to fetch a bigger/different set without going through Docker? From
 
 ```
 bark_detector/           the application (Python package)
-  static/                 event log + settings pages (plain HTML/JS, no build step)
+  templates/               event log + settings pages (plain HTML/JS, no build step)
+  static/                  shared stylesheet + websocket client used by both pages
 config.example.yaml      annotated config reference - optional, copy to ./config/config.yaml
 requirements.txt
 Dockerfile
@@ -151,5 +148,17 @@ test-rig/                local end-to-end test rig (mosquitto + mediamtx + publi
 
 - Wyoming-protocol source (M5 Atom Echo and similar satellites) - stubbed,
   raises a clear error if configured, not implemented.
-- `linux/arm64` image has not been built/booted on real hardware yet, only
-  cross-checked for obvious blockers (see above).
+- `linux/arm64` image - removed for now; this release only builds/publishes
+  `linux/amd64`. Revisit once there's real ARM hardware to verify against.
+- No CI yet - planned: a GitHub Actions workflow that at minimum imports
+  the package and builds the Docker image on every push/PR, so a broken
+  build/import is caught before release rather than at `docker compose up`.
+
+## License
+
+[MIT](LICENSE)
+
+## AI assistance
+
+Large parts of this project (implementation and documentation) were built
+with AI assistance (Claude Code).

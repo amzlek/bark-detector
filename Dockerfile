@@ -1,17 +1,18 @@
 # syntax=docker/dockerfile:1.6
 #
-# Multi-arch (linux/amd64, linux/arm64), size-optimized image:
+# linux/amd64, size-optimized image:
 #   - static ffmpeg binary (no apt codec/library tree)
 #   - python:3.14-slim base
 #   - ai-edge-litert (Google's official, actively maintained TFLite
-#     interpreter) ships prebuilt wheels for both platforms on PyPI, so a
-#     plain pip install resolves the right one automatically - no more
-#     manual per-arch wheel URLs to maintain
+#     interpreter) ships a prebuilt wheel on PyPI, so a plain pip install
+#     resolves it automatically - no manual wheel URL to maintain
 #   - no build toolchain in the final image (model fetched in an earlier
 #     stage and copied in)
 #
-# Build for both platforms with:
-#   docker buildx build --platform linux/amd64,linux/arm64 -t bark-detector:latest --push .
+# linux/arm64 isn't published yet - see README's "Status / not yet done".
+#
+# Build with:
+#   docker build -t bark-detector:latest .
 
 FROM mwader/static-ffmpeg:7.1.1 AS ffmpeg
 
