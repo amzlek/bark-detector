@@ -129,6 +129,9 @@ class FfmpegAudioSource(AudioSource):
                 return None
 
         try:
+            # start() always passes stdout=PIPE, so this is never actually
+            # None - the assert just narrows the type for the checker
+            assert process.stdout is not None
             chunk = process.stdout.read(CHUNK_BYTES)
         except Exception as exc:
             logger.error("[%s] error reading from ffmpeg: %s", self.source.name, exc)

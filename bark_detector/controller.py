@@ -23,6 +23,7 @@ from .event_store import EventStore
 from .mqtt_publisher import MqttPublisher
 from .probe import probe_source
 from .worker import SourceWorker
+from .ws_hub import WsHub
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,8 @@ class AppController:
         self._workers: dict[str, _ManagedWorker] = {}
         self._source_status: dict[str, str] = {}
 
-        self.publisher = MqttPublisher(config.mqtt)
+        self.ws_hub = WsHub()
+        self.publisher = MqttPublisher(config.mqtt, on_status_change=self._on_mqtt_status_change)
         self.store = EventStore(config.db_path)
 
         self._background_stop_event = threading.Event()
@@ -133,6 +135,7 @@ class AppController:
                     continue
 
                 self._source_status[name] = new_status
+                self.ws_hub.broadcast({"type": "source_status", "name": name, "status": new_status})
                 # "connecting" only ever appears as the very first observation
                 # (nothing has happened yet) - every other case is a real
                 # transition worth notifying, INCLUDING the first one landing
@@ -148,6 +151,12 @@ class AppController:
     def all_source_status(self) -> dict[str, str]:
         with self._lock:
             return dict(self._source_status)
+
+    def mqtt_connected(self) -> bool:
+        return self.publisher.is_connected()
+
+    def _on_mqtt_status_change(self, connected: bool) -> None:
+        self.ws_hub.broadcast({"type": "mqtt_status", "connected": connected})
 
     # -- cleanup ----------------------------------------------------------------
 

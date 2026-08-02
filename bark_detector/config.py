@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import secrets
 import tempfile
 from dataclasses import dataclass, field
 from typing import TypeVar
@@ -121,6 +122,13 @@ class WebConfig:
     enabled: bool = True
     host: str = "0.0.0.0"
     port: int = 8099
+    # gates the websocket (settings CRUD + live status) - the browser only
+    # learns it because index.html/settings.html render it in server-side,
+    # so a third-party page can't open a websocket to us even though the
+    # plain GET routes stay open. Empty means "not generated yet"; see
+    # _build_web_config, which fills in a random one and main.py's
+    # self-heal write-back persists it.
+    auth_token: str = ""
 
 
 @dataclass
@@ -198,10 +206,19 @@ def build_source_config(raw: dict, defaults: dict | None = None) -> SourceConfig
 
 
 def _build_web_config(raw: dict) -> WebConfig:
+    token = _env_override_optional_str("WEB_AUTH_TOKEN", raw.get("auth_token"))
+    if not token:
+        token = secrets.token_urlsafe(32)
+        logger.info(
+            "generated a new websocket auth token (none was configured) - "
+            "it'll be written back to config.yaml"
+        )
+
     return WebConfig(
         enabled=_env_override("WEB_ENABLED", bool(raw.get("enabled", WebConfig.enabled))),
         host=_env_override("WEB_HOST", raw.get("host", WebConfig.host)),
         port=_env_override("WEB_PORT", int(raw.get("port", WebConfig.port))),
+        auth_token=token,
     )
 
 
@@ -283,6 +300,7 @@ def dump_config(config: Config) -> dict:
             "enabled": config.web.enabled,
             "host": config.web.host,
             "port": config.web.port,
+            "auth_token": config.web.auth_token,
         },
         "cleanup": {
             "max_age_days": config.cleanup.max_age_days,

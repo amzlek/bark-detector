@@ -39,6 +39,9 @@ def probe_source(
 
     def _read() -> None:
         try:
+            # stdout=PIPE was passed above, so this is never actually None -
+            # the assert just narrows the type for the checker
+            assert process.stdout is not None
             chunk_queue.put(process.stdout.read(CHUNK_BYTES))
         except Exception:
             chunk_queue.put(b"")

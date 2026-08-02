@@ -1,31 +1,43 @@
 """Web UI: event log + a settings page for managing sources and the MQTT
 broker at runtime. Built on Flask (not FastAPI) to keep the dependency
 footprint small (no starlette/pydantic/uvicorn) while still making it easy
-to add more endpoints later.
+to add more endpoints later. Flask-Sock adds the websocket route on top of
+the same threaded werkzeug dev server - no separate ASGI stack needed.
 
 Routes:
-  GET  /                      -> static/index.html (event log)
-  GET  /settings              -> static/settings.html
+  GET  /                      -> templates/index.html (event log)
+  GET  /settings              -> templates/settings.html
+  GET  /ws-client.js          -> shared websocket client used by both pages
+  GET  /style.css             -> shared stylesheet used by both pages
   GET  /api/events            -> JSON list of recent detections (?limit=&before=)
   GET  /snippets/<filename>   -> the saved WAV file for a detection
   GET  /api/sources           -> list configured sources (with live status)
-  POST /api/sources           -> add a source
-  PUT  /api/sources/<name>    -> update a source
-  DELETE /api/sources/<name>  -> remove a source
-  POST /api/sources/test      -> probe connectivity for a not-yet-saved source
-  GET  /api/mqtt              -> current MQTT broker settings
-  PUT  /api/mqtt              -> update MQTT broker settings
   GET  /api/stats             -> recordings count + disk usage
+  WS   /ws?token=...          -> everything else: settings CRUD (add/edit/
+                                  delete source, update MQTT) as request/
+                                  response messages, plus server-pushed
+                                  source/MQTT status. Requires web.auth_token
+                                  (rendered into the page by / and /settings,
+                                  so a third-party origin can't obtain it).
+
+Settings CRUD used to be POST/PUT/DELETE on /api/sources and /api/mqtt;
+those routes are gone now that the websocket is the only way to mutate
+config (see notes.tmp for the rationale) - GET /api/sources stays since
+read-only endpoints remain public HTTP.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import hmac
+import json
 import logging
 import os
+import queue
 import threading
 
-from flask import Flask, abort, jsonify, request, send_file, send_from_directory
+from flask import Flask, abort, jsonify, render_template, request, send_file, send_from_directory
+from flask_sock import Sock
 from werkzeug.serving import BaseWSGIServer, make_server
 
 from .config import ConfigError
@@ -35,9 +47,14 @@ logger = logging.getLogger(__name__)
 
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
+# how often the ws handler wakes up (even with nothing received) to drain
+# this client's outbound queue and push any pending broadcast
+_WS_POLL_INTERVAL = 1.0
+
 
 def create_app(controller: AppController) -> Flask:
     app = Flask(__name__, static_folder=None)
+    sock = Sock(app)
 
     @app.errorhandler(ConfigError)
     def handle_config_error(exc: ConfigError):
@@ -45,11 +62,19 @@ def create_app(controller: AppController) -> Flask:
 
     @app.get("/")
     def index():
-        return send_from_directory(_STATIC_DIR, "index.html")
+        return render_template("index.html", ws_token=controller.config.web.auth_token)
 
     @app.get("/settings")
     def settings_page():
-        return send_from_directory(_STATIC_DIR, "settings.html")
+        return render_template("settings.html", ws_token=controller.config.web.auth_token)
+
+    @app.get("/ws-client.js")
+    def ws_client_js():
+        return send_from_directory(_STATIC_DIR, "ws-client.js")
+
+    @app.get("/style.css")
+    def style_css():
+        return send_from_directory(_STATIC_DIR, "style.css")
 
     # -- events / snippets --------------------------------------------------
 
@@ -75,7 +100,7 @@ def create_app(controller: AppController) -> Flask:
 
         return send_file(full_path, mimetype="audio/wav")
 
-    # -- sources --------------------------------------------------------------
+    # -- sources (read-only; CRUD moved to the websocket) ----------------------
 
     @app.get("/api/sources")
     def list_sources():
@@ -87,44 +112,115 @@ def create_app(controller: AppController) -> Flask:
             result.append(entry)
         return jsonify(result)
 
-    @app.post("/api/sources")
-    def add_source():
-        source = controller.add_source(request.get_json(force=True) or {})
-        return jsonify(dataclasses.asdict(source)), 201
-
-    @app.put("/api/sources/<name>")
-    def update_source(name: str):
-        source = controller.update_source(name, request.get_json(force=True) or {})
-        return jsonify(dataclasses.asdict(source))
-
-    @app.delete("/api/sources/<name>")
-    def delete_source(name: str):
-        controller.delete_source(name)
-        return "", 204
-
-    @app.post("/api/sources/test")
-    def test_source():
-        ok, message = controller.test_source(request.get_json(force=True) or {})
-        return jsonify({"ok": ok, "message": message}), (200 if ok else 502)
-
-    # -- mqtt -------------------------------------------------------------------
-
-    @app.get("/api/mqtt")
-    def get_mqtt():
-        return jsonify(dataclasses.asdict(controller.get_mqtt()))
-
-    @app.put("/api/mqtt")
-    def update_mqtt():
-        mqtt_config = controller.update_mqtt(request.get_json(force=True) or {})
-        return jsonify(dataclasses.asdict(mqtt_config))
-
     # -- stats ------------------------------------------------------------------
 
     @app.get("/api/stats")
     def get_stats():
         return jsonify(controller.get_stats())
 
+    # -- websocket: live status + settings CRUD ---------------------------------
+
+    @sock.route("/ws")
+    def ws_endpoint(ws):
+        token = request.args.get("token", "")
+        expected = controller.config.web.auth_token
+        if not expected or not hmac.compare_digest(token, expected):
+            logger.warning("rejected websocket connection: bad or missing token")
+            ws.close(reason=4401, message="unauthorized")
+            return
+
+        _serve_ws_client(controller, ws)
+
     return app
+
+
+def _serve_ws_client(controller: AppController, ws) -> None:
+    outbound: queue.Queue = controller.ws_hub.register()
+    try:
+        _send(
+            ws,
+            {
+                "type": "hello",
+                "source_status": controller.all_source_status(),
+                "mqtt_connected": controller.mqtt_connected(),
+            },
+        )
+
+        while True:
+            try:
+                raw = ws.receive(timeout=_WS_POLL_INTERVAL)
+            except Exception:
+                break
+            if raw is None and getattr(ws, "connected", True) is False:
+                break
+            if raw is not None:
+                _dispatch(controller, ws, raw)
+
+            try:
+                _drain_outbound(ws, outbound)
+            except Exception:
+                break
+    finally:
+        controller.ws_hub.unregister(outbound)
+
+
+def _drain_outbound(ws, outbound: queue.Queue) -> None:
+    while True:
+        try:
+            message = outbound.get_nowait()
+        except queue.Empty:
+            return
+        _send(ws, message)
+
+
+def _dispatch(controller: AppController, ws, raw) -> None:
+    try:
+        msg = json.loads(raw)
+    except (ValueError, TypeError):
+        _send(ws, {"type": "error", "error": "invalid JSON"})
+        return
+
+    action = msg.get("type")
+    req_id = msg.get("id")
+    payload = msg.get("payload") or {}
+
+    try:
+        if action == "sources.add":
+            source = controller.add_source(payload)
+            _reply(ws, action, req_id, dataclasses.asdict(source))
+        elif action == "sources.update":
+            source = controller.update_source(msg.get("name"), payload)
+            _reply(ws, action, req_id, dataclasses.asdict(source))
+        elif action == "sources.delete":
+            controller.delete_source(msg.get("name"))
+            _reply(ws, action, req_id, {"name": msg.get("name")})
+        elif action == "sources.test":
+            ok, message = controller.test_source(payload)
+            _reply(ws, action, req_id, {"ok": ok, "message": message})
+        elif action == "mqtt.get":
+            _reply(ws, action, req_id, dataclasses.asdict(controller.get_mqtt()))
+        elif action == "mqtt.update":
+            mqtt_config = controller.update_mqtt(payload)
+            _reply(ws, action, req_id, dataclasses.asdict(mqtt_config))
+        else:
+            _fail(ws, action, req_id, f"unknown message type '{action}'")
+    except ConfigError as exc:
+        _fail(ws, action, req_id, str(exc))
+    except Exception:
+        logger.exception("unhandled error processing ws message '%s'", action)
+        _fail(ws, action, req_id, "internal error")
+
+
+def _reply(ws, action, req_id, data) -> None:
+    _send(ws, {"type": action, "id": req_id, "ok": True, "data": data})
+
+
+def _fail(ws, action, req_id, error: str) -> None:
+    _send(ws, {"type": action, "id": req_id, "ok": False, "error": error})
+
+
+def _send(ws, message: dict) -> None:
+    ws.send(json.dumps(message))
 
 
 def start_web_server(controller: AppController, host: str, port: int) -> BaseWSGIServer:

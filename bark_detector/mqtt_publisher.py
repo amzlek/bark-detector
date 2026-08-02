@@ -6,20 +6,15 @@ import json
 import logging
 import threading
 import time
+from typing import Callable
 
 import paho.mqtt.client as mqtt
+from paho.mqtt.enums import CallbackAPIVersion
 
 from .config import MqttConfig
 from .snippet import DetectionEvent
 
 logger = logging.getLogger(__name__)
-
-
-def _build_client(config: MqttConfig) -> mqtt.Client:
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=config.client_id)
-    if config.username:
-        client.username_pw_set(config.username, config.password)
-    return client
 
 
 class MqttPublisher:
@@ -31,10 +26,42 @@ class MqttPublisher:
     callers (controller.py, worker.py, cleanup.py) don't need to know or
     care whether MQTT is turned on."""
 
-    def __init__(self, config: MqttConfig):
+    def __init__(self, config: MqttConfig, on_status_change: Callable[[bool], None] | None = None):
         self._lock = threading.RLock()
         self.config = config
-        self.client = _build_client(config)
+        self.connected = False
+        # notified (outside the lock) whenever the broker connection flips -
+        # the websocket layer uses this to push live status to the UI
+        self.on_status_change = on_status_change
+        self.client = self._build_client(config)
+
+    def _build_client(self, config: MqttConfig) -> mqtt.Client:
+        client = mqtt.Client(CallbackAPIVersion.VERSION2, client_id=config.client_id)
+        if config.username:
+            client.username_pw_set(config.username, config.password)
+        client.on_connect = self._handle_connect
+        client.on_disconnect = self._handle_disconnect
+        return client
+
+    def _handle_connect(self, client, userdata, *args) -> None:
+        self._set_connected(True)
+
+    def _handle_disconnect(self, client, userdata, *args) -> None:
+        self._set_connected(False)
+
+    def _set_connected(self, connected: bool) -> None:
+        with self._lock:
+            changed = connected != self.connected
+            self.connected = connected
+        if changed and self.on_status_change:
+            try:
+                self.on_status_change(connected)
+            except Exception:
+                logger.exception("mqtt status change callback failed")
+
+    def is_connected(self) -> bool:
+        with self._lock:
+            return self.connected
 
     def connect(self) -> None:
         with self._lock:
@@ -63,9 +90,16 @@ class MqttPublisher:
             except Exception:
                 logger.exception("error disconnecting previous MQTT client")
 
-            self.client = _build_client(new_config)
+            self.client = self._build_client(new_config)
             self.config = new_config
 
+        # the old client's on_disconnect may not fire (or may be delayed)
+        # once we swap self.client out from under it, so drop the flag
+        # ourselves - the new client's on_connect will flip it back once
+        # it actually connects
+        self._set_connected(False)
+
+        with self._lock:
             if not new_config.enabled:
                 logger.info("MQTT reconfigured -> disabled")
                 return
@@ -140,3 +174,4 @@ class MqttPublisher:
                 return
             self.client.loop_stop()
             self.client.disconnect()
+        self._set_connected(False)

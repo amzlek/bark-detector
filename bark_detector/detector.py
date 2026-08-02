@@ -16,13 +16,8 @@ import numpy as np
 
 from .audio_format import AUDIO_MAX_BIT_RANGE, AUDIO_SAMPLE_RATE
 
-try:
-    from ai_edge_litert.interpreter import Interpreter
-except ModuleNotFoundError:  # pragma: no cover - platform dependent
-    try:
-        from tflite_runtime.interpreter import Interpreter
-    except ModuleNotFoundError:
-        from tensorflow.lite.python.interpreter import Interpreter
+from ai_edge_litert.interpreter import Interpreter
+
 
 logger = logging.getLogger(__name__)
 

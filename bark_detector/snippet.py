@@ -96,6 +96,9 @@ class SnippetRecorder:
 
     def _finalize(self) -> DetectionEvent:
         capture = self.active
+        # only called from add_chunk() right after it's confirmed self.active
+        # is set - the assert just narrows the type for the checker
+        assert capture is not None
         all_chunks = capture.pre_chunks + capture.post_chunks
         duration = len(all_chunks) * AUDIO_DURATION
 

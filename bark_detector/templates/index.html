@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bark Detector - Event Log</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<nav><a href="/"><strong>Event Log</strong></a><a href="/settings">Settings</a></nav>
+<h1>Bark Detector - Event Log</h1>
+
+<h2>Status</h2>
+<ul class="statuses" id="statuses">
+  <li class="badge connecting" id="ws-badge">backend: connecting</li>
+  <li class="badge connecting" id="mqtt-badge">mqtt: unknown</li>
+</ul>
+
+<h2>Recent detections</h2>
+<table>
+  <thead>
+    <tr><th>Time</th><th>Source</th><th>Label</th><th>Score</th><th>Snippet</th></tr>
+  </thead>
+  <tbody id="events"></tbody>
+</table>
+<p id="empty" class="empty" hidden>No detections yet.</p>
+
+<script>
+  window.WS_TOKEN = {{ ws_token | tojson }};
+</script>
+<script src="/ws-client.js"></script>
+<script>
+async function loadEvents() {
+  const res = await fetch('/api/events?limit=100');
+  const events = await res.json();
+  const tbody = document.getElementById('events');
+  const empty = document.getElementById('empty');
+
+  tbody.innerHTML = '';
+  empty.hidden = events.length > 0;
+
+  for (const ev of events) {
+    const tr = document.createElement('tr');
+    const time = new Date(ev.timestamp * 1000).toLocaleString();
+    tr.innerHTML = `
+      <td>${time}</td>
+      <td>${ev.source}</td>
+      <td>${ev.label}</td>
+      <td class="score">${ev.score.toFixed(2)}</td>
+      <td><audio controls preload="none" src="${ev.snippet_url}"></audio></td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+const statusesList = document.getElementById('statuses');
+const wsBadge = document.getElementById('ws-badge');
+const mqttBadge = document.getElementById('mqtt-badge');
+const sourceBadges = new Map();
+
+function setBadge(el, status, label) {
+  el.className = 'badge ' + status;
+  el.textContent = label;
+}
+
+function setSourceStatus(name, status) {
+  let el = sourceBadges.get(name);
+  if (!el) {
+    el = document.createElement('li');
+    statusesList.appendChild(el);
+    sourceBadges.set(name, el);
+  }
+  setBadge(el, status, `${name}: ${status}`);
+}
+
+async function loadSourceNames() {
+  const res = await fetch('/api/sources');
+  const sources = await res.json();
+  for (const source of sources) setSourceStatus(source.name, source.status || 'connecting');
+}
+
+BarkWs.on('open', () => setBadge(wsBadge, 'connected', 'backend: connected'));
+BarkWs.on('close', () => setBadge(wsBadge, 'disconnected', 'backend: disconnected'));
+BarkWs.on('message', (msg) => {
+  if (msg.type === 'hello') {
+    setBadge(mqttBadge, msg.mqtt_connected ? 'connected' : 'disconnected',
+      'mqtt: ' + (msg.mqtt_connected ? 'connected' : 'disconnected'));
+    for (const [name, status] of Object.entries(msg.source_status || {})) {
+      setSourceStatus(name, status);
+    }
+  } else if (msg.type === 'mqtt_status') {
+    setBadge(mqttBadge, msg.connected ? 'connected' : 'disconnected',
+      'mqtt: ' + (msg.connected ? 'connected' : 'disconnected'));
+  } else if (msg.type === 'source_status') {
+    setSourceStatus(msg.name, msg.status);
+  }
+});
+
+loadEvents();
+loadSourceNames();
+BarkWs.connect();
+setInterval(loadEvents, 15000);
+</script>
+</body>
+</html>
