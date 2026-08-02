@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bark Detector - Event Log</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    max-width: 800px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+  }
+  h1 { font-size: 1.25rem; }
+  nav a { margin-right: 1rem; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid #8884; vertical-align: middle; }
+  th { font-size: 0.8rem; text-transform: uppercase; opacity: 0.7; }
+  audio { height: 32px; max-width: 220px; }
+  .empty { opacity: 0.6; padding: 1rem 0; }
+  .score { font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<nav><a href="/"><strong>Event Log</strong></a><a href="/settings">Settings</a></nav>
+<h1>Bark Detector - Event Log</h1>
+<table>
+  <thead>
+    <tr><th>Time</th><th>Source</th><th>Label</th><th>Score</th><th>Snippet</th></tr>
+  </thead>
+  <tbody id="events"></tbody>
+</table>
+<p id="empty" class="empty" hidden>No detections yet.</p>
+
+<script>
+async function loadEvents() {
+  const res = await fetch('/api/events?limit=100');
+  const events = await res.json();
+  const tbody = document.getElementById('events');
+  const empty = document.getElementById('empty');
+
+  tbody.innerHTML = '';
+  empty.hidden = events.length > 0;
+
+  for (const ev of events) {
+    const tr = document.createElement('tr');
+    const time = new Date(ev.timestamp * 1000).toLocaleString();
+    tr.innerHTML = `
+      <td>${time}</td>
+      <td>${ev.source}</td>
+      <td>${ev.label}</td>
+      <td class="score">${ev.score.toFixed(2)}</td>
+      <td><audio controls preload="none" src="${ev.snippet_url}"></audio></td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+loadEvents();
+setInterval(loadEvents, 15000);
+</script>
+</body>
+</html>

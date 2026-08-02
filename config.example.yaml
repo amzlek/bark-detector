@@ -1,0 +1,66 @@
+mqtt:
+  host: mqtt.local
+  port: 1883
+  username: bark_detector
+  password: changeme
+  # {source} and {label} are substituted per event
+  topic: bark_detector/{source}/event
+  # {source} substituted; published (retained) whenever a source's audio
+  # actually starts/stops flowing - not just when its ffmpeg process starts
+  status_topic: bark_detector/{source}/status
+  # {event} substituted; used for cross-source notifications, currently just
+  # the storage cleanup hitting its space cap (see 'cleanup' below)
+  system_topic: bark_detector/system/{event}
+
+# where saved WAV snippets are written (mount this as a volume for 
+# persistence or so other tools can read the files)
+snippet_dir: /media/bark_snippets
+
+log_level: INFO
+
+# event log + settings UI (add/edit/delete sources, change MQTT settings)
+web:
+  enabled: true
+  host: 0.0.0.0
+  port: 8099
+
+# global retention for saved snippets - checked every check_interval_minutes.
+# age-based cleanup runs first, then space-based (oldest-first) if still over
+# max_space_mb; a space-triggered purge also publishes to mqtt.system_topic.
+# set either limit to null to disable it.
+cleanup:
+  max_age_days: 30
+  max_space_mb: 1000
+  check_interval_minutes: 15
+
+# defaults applied to every source unless overridden per-source below.
+# note: this only applies to sources loaded from this file as-is. once you
+# add/edit/delete anything through the settings UI, the whole file gets
+# rewritten with every source fully spelled out and this 'defaults' block
+# removed - hand-edit the file again afterwards if you want it back.
+defaults:
+  listen: [bark, bow-wow, howl, yip]
+  min_volume: 500
+  pre_capture: 5
+  post_capture: 5
+  thresholds:
+    bark: 0.8
+
+sources:
+  # a camera's RTSP stream that includes an audio track
+  - name: backyard
+    type: rtsp
+    path: rtsp://user:pass@192.168.1.50:554/stream1
+
+  # a USB microphone attached to the host running this container
+  # find the device name with `arecord -l` (Linux) - format is hw:<card>,<device>
+  - name: garage_mic
+    type: device
+    path: hw:1,0
+    pre_capture: 3
+    post_capture: 3
+
+  # M5 Atom Echo / other Wyoming-protocol satellites are not supported yet
+  # - name: living_room
+  #   type: wyoming
+  #   path: 192.168.1.60:10700

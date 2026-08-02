@@ -1,0 +1,16 @@
+services:
+  bark-detector:
+    image: bark-detector:latest
+    build: .
+    restart: unless-stopped
+    # needed for USB mic / ALSA device sources; omit if only using rtsp sources
+    devices:
+      - /dev/snd:/dev/snd
+    ports:
+      - "8099:8099"
+    volumes:
+      # NOT read-only: the settings page (Sources/MQTT tab) writes changes
+      # back to this file, atomically, whenever you add/edit/delete a source
+      # or update the MQTT broker settings
+      - ./config.yaml:/config/config.yaml
+      - ./snippets:/media/bark_snippets

@@ -1,0 +1,37 @@
+# bark-detector config for the local test rig (test/docker-compose.yml):
+# points at the mosquitto and mediamtx services defined there instead of
+# real hardware, so you can validate detection end-to-end against
+# test_dataset/*.wav (see test_dataset/sample_list.csv for ground truth).
+
+mqtt:
+  host: mosquitto
+  port: 1883
+  topic: bark_detector/{source}/event
+  status_topic: bark_detector/{source}/status
+  system_topic: bark_detector/system/{event}
+
+snippet_dir: /media/bark_snippets
+log_level: DEBUG
+
+web:
+  enabled: true
+  host: 0.0.0.0
+  port: 8099
+
+# short interval so a manual test run can actually observe a cleanup pass;
+# generous limits so it doesn't purge the very snippets you're inspecting
+cleanup:
+  max_age_days: 1
+  max_space_mb: 50
+  check_interval_minutes: 1
+
+sources:
+  - name: backyard
+    type: rtsp
+    path: rtsp://mediamtx:8554/backyard
+    listen: [bark, bow-wow, howl, yip]
+    thresholds:
+      bark: 0.8
+    min_volume: 500
+    pre_capture: 3
+    post_capture: 3

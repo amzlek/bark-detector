@@ -1,0 +1,81 @@
+# Local end-to-end test rig: a real MQTT broker + a real RTSP stream looping
+# dataset/*.wav, so bark-detector runs its actual detection pipeline
+# (ffmpeg pull -> TFLite classify -> snippet -> MQTT publish) against known
+# labeled audio instead of real hardware.
+#
+# dataset/ isn't committed. You don't need to fetch it yourself though -
+# stream-publisher downloads it into the bind-mounted ./dataset on first
+# start (see stream/entrypoint.sh) and reuses it on every run after that.
+#
+# Run from this directory:
+#   docker compose up --build
+#
+# Then:
+#   - watch detections:  mosquitto_sub -h localhost -t 'bark_detector/#'
+#   - browse the event log / settings UI: http://localhost:8099
+#   - ground truth is in the filenames: NN_bark.wav / NN_negative.wav
+#
+# Optional env vars for stream-publisher (set before `docker compose up`):
+#   BARK_COUNT, NEGATIVE_COUNT  - sample counts (default 5 each)
+#   FORCE_REFETCH=true          - re-download even if ./dataset already has samples
+#
+# bark-detector waits for stream-publisher to report healthy (ffmpeg still
+# alive a few seconds after connecting to mediamtx - see publish.sh) -
+# otherwise it'd spend the whole download+playlist-build phase churning
+# through failed connection attempts for nothing. (mediamtx's own status
+# API would be the more direct signal, but it requires auth for anything
+# but localhost by default and isn't worth fighting for a test rig.)
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    ports:
+      - "1883:1883"
+
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    ports:
+      - "8554:8554"
+
+  stream-publisher:
+    build:
+      context: .
+      dockerfile: stream/Dockerfile
+    environment:
+      MEDIAMTX_HOST: mediamtx
+      STREAM_PATH: backyard
+      BARK_COUNT: ${BARK_COUNT:-5}
+      NEGATIVE_COUNT: ${NEGATIVE_COUNT:-5}
+      FORCE_REFETCH: ${FORCE_REFETCH:-false}
+    volumes:
+      - ./dataset:/data
+    depends_on:
+      - mediamtx
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/streaming_ready"]
+      interval: 3s
+      timeout: 3s
+      # generous: covers the dataset download + playlist build, which can
+      # take a couple minutes depending on network speed and how many
+      # AudioSet YouTube ids are dead. Failures during this window don't
+      # count against `retries`.
+      start_period: 240s
+      retries: 5
+
+  bark-detector:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    depends_on:
+      mosquitto:
+        condition: service_started
+      stream-publisher:
+        condition: service_healthy
+    volumes:
+      - ./config.yaml:/config/config.yaml
+      - ./snippets:/media/bark_snippets
+    ports:
+      - "8099:8099"
