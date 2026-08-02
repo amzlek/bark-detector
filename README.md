@@ -42,32 +42,37 @@ dependency on Frigate's video/recording/app framework.
 ## Quick start
 
 ```bash
-cp config.example.yaml config.yaml
-# edit config.yaml: at least mqtt.host and your source(s)
-
 docker compose up --build
 ```
 
+That's it - no config file required first. Defaults are: zero sources, web
+UI on, MQTT off. Open the settings UI and add a source; MQTT stays off
+until you turn it on there (or in config.yaml, or `MQTT_ENABLED=true`).
+
 - Event log / settings UI: http://localhost:8099
 - Saved snippets and the event log db land in `./snippets` (bind-mounted)
-- `config.yaml` is *not* read-only: the settings UI writes changes back to
-  it, atomically, whenever you add/edit/delete a source or update MQTT
-  settings
+- Config lives at `./config/config.yaml` (bind-mounted as a directory, not
+  a single file - see the comment in `docker-compose.yml` for why). A
+  missing/empty/partial file self-heals into a fully-populated one with
+  defaults on first boot, and the settings UI keeps it updated after that
+  whenever you add/edit/delete a source or change MQTT settings.
 
-See `config.example.yaml` for every field, with comments. The top-level
-sections are: `mqtt`, `sources`, `web`, `cleanup`, plus `snippet_dir`,
-`ffmpeg_path`, `log_level`.
+Prefer to hand-configure things upfront instead? Copy `config.example.yaml`
+to `./config/config.yaml` before starting - every field is documented
+there, including which env var overrides it. Top-level sections: `mqtt`,
+`sources`, `web`, `cleanup`, plus `snippet_dir`, `ffmpeg_path`, `log_level`.
 
 ### MQTT topics
 
-| Topic (default template)              | When                                  | Retained |
+MQTT is disabled by default (`mqtt.enabled: false` / `MQTT_ENABLED=false`).
+Topics are all derived from a single configurable prefix, `mqtt.topic`
+(default `bark_detector`):
+
+| Topic (with the default prefix)       | When                                  | Retained |
 |----------------------------------------|----------------------------------------|:--------:|
 | `bark_detector/{source}/event`         | a detection fires                      | no       |
 | `bark_detector/{source}/status`        | a source connects/disconnects          | yes      |
 | `bark_detector/system/{event}`         | e.g. `space_limit_reached` on cleanup  | no       |
-
-Templates are configurable under `mqtt.topic` / `mqtt.status_topic` /
-`mqtt.system_topic`.
 
 ## Multi-arch build
 
@@ -131,7 +136,7 @@ Want to fetch a bigger/different set without going through Docker? From
 ```
 bark_detector/           the application (Python package)
   static/                 event log + settings pages (plain HTML/JS, no build step)
-config.example.yaml      annotated config reference - copy to config.yaml
+config.example.yaml      annotated config reference - optional, copy to ./config/config.yaml
 requirements.txt
 Dockerfile
 docker-compose.yml       run against real hardware

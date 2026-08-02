@@ -92,6 +92,9 @@
 
 <h2>MQTT broker</h2>
 <form id="mqtt-form">
+  <label for="mqtt-enabled">Enabled</label>
+  <input id="mqtt-enabled" type="checkbox" checked style="justify-self: start;">
+
   <label for="mqtt-host">Host</label>
   <input id="mqtt-host" required placeholder="mqtt.local">
 
@@ -104,8 +107,8 @@
   <label for="mqtt-password">Password</label>
   <input id="mqtt-password" type="password">
 
-  <label for="mqtt-topic">Topic template</label>
-  <input id="mqtt-topic" value="bark_detector/{source}/event">
+  <label for="mqtt-topic">Topic prefix</label>
+  <input id="mqtt-topic" value="bark_detector" placeholder="bark_detector">
 
   <label for="mqtt-client-id">Client ID</label>
   <input id="mqtt-client-id" value="bark_detector">
@@ -271,17 +274,19 @@ const mqttStatus = document.getElementById('mqtt-status');
 async function loadMqtt() {
   const res = await fetch('/api/mqtt');
   const mqtt = await res.json();
+  document.getElementById('mqtt-enabled').checked = mqtt.enabled !== false;
   document.getElementById('mqtt-host').value = mqtt.host || '';
   document.getElementById('mqtt-port').value = mqtt.port || 1883;
   document.getElementById('mqtt-username').value = mqtt.username || '';
   document.getElementById('mqtt-password').value = mqtt.password || '';
-  document.getElementById('mqtt-topic').value = mqtt.topic || 'bark_detector/{source}/event';
+  document.getElementById('mqtt-topic').value = mqtt.topic || 'bark_detector';
   document.getElementById('mqtt-client-id').value = mqtt.client_id || 'bark_detector';
 }
 
 mqttForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const body = {
+    enabled: document.getElementById('mqtt-enabled').checked,
     host: document.getElementById('mqtt-host').value.trim(),
     port: parseInt(document.getElementById('mqtt-port').value, 10),
     username: document.getElementById('mqtt-username').value.trim() || null,

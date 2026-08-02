@@ -9,8 +9,11 @@ services:
     ports:
       - "8099:8099"
     volumes:
-      # NOT read-only: the settings page (Sources/MQTT tab) writes changes
-      # back to this file, atomically, whenever you add/edit/delete a source
-      # or update the MQTT broker settings
-      - ./config.yaml:/config/config.yaml
+      # a directory, not a single file: if ./config/config.yaml doesn't
+      # exist yet, Docker would otherwise create a *directory* there
+      # instead of letting the app create the file, which breaks the
+      # zero-config self-heal on first boot. The app writes config.yaml
+      # inside this directory itself (and keeps it updated whenever you
+      # add/edit/delete a source or change MQTT settings via the UI).
+      - ./config:/config
       - ./snippets:/media/bark_snippets

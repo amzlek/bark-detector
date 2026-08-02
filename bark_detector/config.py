@@ -7,6 +7,7 @@ import logging
 import os
 import tempfile
 from dataclasses import dataclass, field
+from typing import TypeVar
 
 import yaml
 
@@ -24,20 +25,79 @@ class ConfigError(ValueError):
     pass
 
 
+_T = TypeVar("_T", bool, int, float, str)
+
+
+def _env_override(key: str, current: _T) -> _T:
+    """ENV always wins over the config file. Casts the env var's string
+    value to match `current`'s type - so this only works for fields that
+    are never None; see _env_override_optional_float for nullable numerics."""
+    raw = os.environ.get(key)
+    if raw is None:
+        return current
+    if isinstance(current, bool):
+        return raw.strip().lower() in ("1", "true", "yes", "on")  # type: ignore[return-value]
+    if isinstance(current, int):
+        return int(raw)  # type: ignore[return-value]
+    if isinstance(current, float):
+        return float(raw)  # type: ignore[return-value]
+    return raw  # type: ignore[return-value]
+
+
+def _env_override_optional_str(key: str, current: str | None) -> str | None:
+    """Like _env_override, but for nullable string fields (username/
+    password) where `current` may already be None - constrained TypeVars
+    can't include None as an option."""
+    raw = os.environ.get(key)
+    return current if raw is None else raw
+
+
+def _env_override_optional_float(key: str, current: float | None) -> float | None:
+    """Like _env_override, but for nullable numeric fields (e.g. cleanup
+    limits) where `current` may already be None - so the cast can't be
+    inferred from it. "none"/"null"/"" (case-insensitive) disables the
+    limit; anything else is parsed as a float."""
+    raw = os.environ.get(key)
+    if raw is None:
+        return current
+    if raw.strip().lower() in ("none", "null", ""):
+        return None
+    return float(raw)
+
+
 @dataclass
 class MqttConfig:
-    host: str
+    # off by default: a fresh boot with no config shouldn't try to reach a
+    # broker that was never configured - turn it on via config.yaml, the
+    # settings UI, or MQTT_ENABLED=true once you have a real broker
+    enabled: bool = False
+    host: str = "localhost"
     port: int = 1883
     username: str | None = None
     password: str | None = None
-    topic: str = "bark_detector/{source}/event"
-    # {source} placeholder; published (retained) on every connected/disconnected
-    # transition, so a fresh subscriber immediately sees current state
-    status_topic: str = "bark_detector/{source}/status"
-    # {event} placeholder; used for cross-source notifications like the
-    # storage cleanup hitting its space cap
-    system_topic: str = "bark_detector/system/{event}"
+    # base prefix - event/status/system topics are derived from it below,
+    # not independently configurable (that was more knobs than anyone
+    # actually needed)
+    topic: str = "bark_detector"
     client_id: str = "bark_detector"
+
+    @property
+    def event_topic(self) -> str:
+        """{source} placeholder."""
+        return f"{self.topic}/{{source}}/event"
+
+    @property
+    def status_topic(self) -> str:
+        """{source} placeholder; published (retained) on every connected/
+        disconnected transition, so a fresh subscriber immediately sees
+        current state."""
+        return f"{self.topic}/{{source}}/status"
+
+    @property
+    def system_topic(self) -> str:
+        """{event} placeholder; used for cross-source notifications like
+        the storage cleanup hitting its space cap."""
+        return f"{self.topic}/system/{{event}}"
 
 
 @dataclass
@@ -87,17 +147,14 @@ class Config:
 
 
 def build_mqtt_config(raw: dict) -> MqttConfig:
-    if "host" not in raw:
-        raise ConfigError("mqtt.host is required")
     return MqttConfig(
-        host=raw["host"],
-        port=int(raw.get("port", 1883)),
-        username=raw.get("username"),
-        password=raw.get("password"),
-        topic=raw.get("topic", MqttConfig.topic),
-        status_topic=raw.get("status_topic", MqttConfig.status_topic),
-        system_topic=raw.get("system_topic", MqttConfig.system_topic),
-        client_id=raw.get("client_id", MqttConfig.client_id),
+        enabled=_env_override("MQTT_ENABLED", bool(raw.get("enabled", MqttConfig.enabled))),
+        host=_env_override("MQTT_HOST", raw.get("host", MqttConfig.host)),
+        port=_env_override("MQTT_PORT", int(raw.get("port", MqttConfig.port))),
+        username=_env_override_optional_str("MQTT_USERNAME", raw.get("username")),
+        password=_env_override_optional_str("MQTT_PASSWORD", raw.get("password")),
+        topic=_env_override("MQTT_TOPIC", raw.get("topic", MqttConfig.topic)),
+        client_id=_env_override("MQTT_CLIENT_ID", raw.get("client_id", MqttConfig.client_id)),
     )
 
 
@@ -142,9 +199,9 @@ def build_source_config(raw: dict, defaults: dict | None = None) -> SourceConfig
 
 def _build_web_config(raw: dict) -> WebConfig:
     return WebConfig(
-        enabled=bool(raw.get("enabled", WebConfig.enabled)),
-        host=raw.get("host", WebConfig.host),
-        port=int(raw.get("port", WebConfig.port)),
+        enabled=_env_override("WEB_ENABLED", bool(raw.get("enabled", WebConfig.enabled))),
+        host=_env_override("WEB_HOST", raw.get("host", WebConfig.host)),
+        port=_env_override("WEB_PORT", int(raw.get("port", WebConfig.port))),
     )
 
 
@@ -156,27 +213,39 @@ def _build_cleanup_config(raw: dict) -> CleanupConfig:
         return None if value is None else float(value)
 
     return CleanupConfig(
-        max_age_days=_optional_float("max_age_days", CleanupConfig.max_age_days),
-        max_space_mb=_optional_float("max_space_mb", CleanupConfig.max_space_mb),
-        check_interval_minutes=float(
-            raw.get("check_interval_minutes", CleanupConfig.check_interval_minutes)
+        max_age_days=_env_override_optional_float(
+            "CLEANUP_MAX_AGE_DAYS", _optional_float("max_age_days", CleanupConfig.max_age_days)
+        ),
+        max_space_mb=_env_override_optional_float(
+            "CLEANUP_MAX_SPACE_MB", _optional_float("max_space_mb", CleanupConfig.max_space_mb)
+        ),
+        check_interval_minutes=_env_override(
+            "CLEANUP_CHECK_INTERVAL_MINUTES",
+            float(raw.get("check_interval_minutes", CleanupConfig.check_interval_minutes)),
         ),
     )
 
 
 def load_config(path: str) -> Config:
-    with open(path, "r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f) or {}
-
-    if "mqtt" not in raw:
-        raise ConfigError("top-level 'mqtt' section is required")
-    if not raw.get("sources"):
-        raise ConfigError("at least one entry in top-level 'sources' is required")
+    """Tolerant by design: a missing file, an empty file, or a file missing
+    whole sections are all fine - every gap is filled with its default (or
+    an env var override, which always wins regardless of what's in the
+    file). Only genuinely malformed values (e.g. an unknown source type,
+    a duplicate source name) still raise ConfigError. Callers that want the
+    resolved config persisted back to disk (so a sparse/missing file becomes
+    a fully populated one) should follow up with save_config() - this
+    function itself never writes, so it stays safe to call on arbitrary
+    paths (tests, an example file, etc.) without side effects."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        raw = {}
 
     defaults = raw.get("defaults", {})
     names = set()
     sources = []
-    for raw_source in raw["sources"]:
+    for raw_source in raw.get("sources") or []:
         source = build_source_config(raw_source, defaults)
         if source.name in names:
             raise ConfigError(f"duplicate source name '{source.name}'")
@@ -184,11 +253,11 @@ def load_config(path: str) -> Config:
         sources.append(source)
 
     return Config(
-        mqtt=build_mqtt_config(raw["mqtt"]),
+        mqtt=build_mqtt_config(raw.get("mqtt", {})),
         sources=sources,
-        snippet_dir=raw.get("snippet_dir", Config.snippet_dir),
-        ffmpeg_path=raw.get("ffmpeg_path", Config.ffmpeg_path),
-        log_level=raw.get("log_level", Config.log_level),
+        snippet_dir=_env_override("SNIPPET_DIR", raw.get("snippet_dir", Config.snippet_dir)),
+        ffmpeg_path=_env_override("FFMPEG_PATH", raw.get("ffmpeg_path", Config.ffmpeg_path)),
+        log_level=_env_override("LOG_LEVEL", raw.get("log_level", Config.log_level)),
         web=_build_web_config(raw.get("web", {})),
         cleanup=_build_cleanup_config(raw.get("cleanup", {})),
     )
@@ -199,13 +268,12 @@ def dump_config(config: Config) -> dict:
     No 'defaults' section is written back - every source is fully explicit."""
     return {
         "mqtt": {
+            "enabled": config.mqtt.enabled,
             "host": config.mqtt.host,
             "port": config.mqtt.port,
             "username": config.mqtt.username,
             "password": config.mqtt.password,
             "topic": config.mqtt.topic,
-            "status_topic": config.mqtt.status_topic,
-            "system_topic": config.mqtt.system_topic,
             "client_id": config.mqtt.client_id,
         },
         "snippet_dir": config.snippet_dir,

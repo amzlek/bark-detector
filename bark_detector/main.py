@@ -6,7 +6,7 @@ import signal
 import sys
 import threading
 
-from .config import ConfigError, load_config
+from .config import ConfigError, load_config, save_config
 from .controller import AppController
 from .web import start_web_server, stop_web_server
 
@@ -17,6 +17,8 @@ def main() -> int:
     config_path = os.environ.get("CONFIG_PATH", "/config/config.yaml")
     if len(sys.argv) > 1:
         config_path = sys.argv[1]
+
+    config_existed = os.path.exists(config_path)
 
     try:
         config = load_config(config_path)
@@ -29,6 +31,25 @@ def main() -> int:
         level=getattr(logging, config.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)-7s [%(threadName)s] %(message)s",
     )
+
+    # self-heal: a missing/empty/partial config.yaml is fine to load (every
+    # gap gets its default or an env override) - write the fully-resolved
+    # result back so the file on disk always ends up fully populated, the
+    # same way the settings UI already keeps it up to date after edits
+    try:
+        save_config(config, config_path)
+    except OSError:
+        logger.warning("could not write resolved config back to %s", config_path)
+
+    if not config_existed:
+        logger.warning(
+            "no config file found at %s - created one with defaults. "
+            "If you're running in a container, make sure this path is on a "
+            "real bind mount/named volume, or anything you configure "
+            "through the settings UI risks being lost if the container is "
+            "removed.",
+            config_path,
+        )
 
     logger.info("loaded %d source(s) from %s", len(config.sources), config_path)
 

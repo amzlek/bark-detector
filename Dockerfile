@@ -42,6 +42,9 @@ COPY --from=model-fetch /models/cpu_audio_model.tflite /app/cpu_audio_model.tfli
 COPY audio-labelmap.txt /app/audio-labelmap.txt
 COPY bark_detector /app/bark_detector
 
+# safe to boot with nothing mounted at /config: a missing/empty config.yaml
+# self-heals to defaults (zero sources, web UI on, MQTT off until you point
+# it at a real broker) instead of failing - see bark_detector/config.py
 ENV CONFIG_PATH=/config/config.yaml
 VOLUME ["/config", "/media"]
 EXPOSE 8099

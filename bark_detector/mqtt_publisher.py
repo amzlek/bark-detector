@@ -25,7 +25,11 @@ def _build_client(config: MqttConfig) -> mqtt.Client:
 class MqttPublisher:
     """Thread-safe: publish() is called concurrently from every SourceWorker,
     and reconfigure() may swap the broker connection at runtime from the
-    settings API, so all access to self.client/self.config is lock-guarded."""
+    settings API, so all access to self.client/self.config is lock-guarded.
+
+    A disabled config (mqtt.enabled: false) makes every method a no-op -
+    callers (controller.py, worker.py, cleanup.py) don't need to know or
+    care whether MQTT is turned on."""
 
     def __init__(self, config: MqttConfig):
         self._lock = threading.RLock()
@@ -34,17 +38,24 @@ class MqttPublisher:
 
     def connect(self) -> None:
         with self._lock:
+            if not self.config.enabled:
+                logger.info("MQTT disabled, not connecting")
+                return
             logger.info(
                 "connecting to MQTT broker %s:%d", self.config.host, self.config.port
             )
-            self.client.connect(self.config.host, self.config.port)
+            # connect_async(), not connect(): the blocking call raises
+            # (crashing the whole app - confirmed by actually booting with
+            # an unreachable default broker) if the broker isn't up yet.
+            # connect_async() + loop_start() hands the attempt to paho's own
+            # background thread, which retries with backoff - the broker
+            # being briefly or permanently down should never take the app
+            # down with it.
+            self.client.connect_async(self.config.host, self.config.port)
             self.client.loop_start()
 
     def reconfigure(self, new_config: MqttConfig) -> None:
         with self._lock:
-            logger.info(
-                "reconfiguring MQTT broker -> %s:%d", new_config.host, new_config.port
-            )
             old_client = self.client
             try:
                 old_client.loop_stop()
@@ -54,13 +65,26 @@ class MqttPublisher:
 
             self.client = _build_client(new_config)
             self.config = new_config
-            self.client.connect(self.config.host, self.config.port)
+
+            if not new_config.enabled:
+                logger.info("MQTT reconfigured -> disabled")
+                return
+
+            logger.info(
+                "reconfiguring MQTT broker -> %s:%d", new_config.host, new_config.port
+            )
+            # see connect() above: async + background retry, not a blocking
+            # call that would surface as a raw 500 from the settings API if
+            # the newly-entered broker address is briefly unreachable
+            self.client.connect_async(self.config.host, self.config.port)
             self.client.loop_start()
 
     def publish(self, event: DetectionEvent) -> None:
         with self._lock:
+            if not self.config.enabled:
+                return
             client = self.client
-            topic = self.config.topic.format(source=event.source, label=event.label)
+            topic = self.config.event_topic.format(source=event.source, label=event.label)
 
         payload = json.dumps(
             {
@@ -81,6 +105,8 @@ class MqttPublisher:
         a subscriber connecting later immediately sees current state, the
         same convention as an MQTT availability topic."""
         with self._lock:
+            if not self.config.enabled:
+                return
             client = self.client
             topic = self.config.status_topic.format(source=source)
 
@@ -91,6 +117,8 @@ class MqttPublisher:
 
     def publish_space_alert(self, used_bytes: int, max_bytes: int, deleted_count: int) -> None:
         with self._lock:
+            if not self.config.enabled:
+                return
             client = self.client
             topic = self.config.system_topic.format(event="space_limit_reached")
 
@@ -108,5 +136,7 @@ class MqttPublisher:
 
     def stop(self) -> None:
         with self._lock:
+            if not self.config.enabled:
+                return
             self.client.loop_stop()
             self.client.disconnect()

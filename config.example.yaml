@@ -1,16 +1,28 @@
+# This whole file is optional - a missing/empty/partial config.yaml just
+# runs with defaults (zero sources, web UI on, MQTT off) instead of
+# failing, and gets self-healed into a fully-populated file on disk. See
+# README.md for the zero-config quick start. This file shows every field
+# spelled out for when you do want to hand-configure something.
+#
+# Every field below can also be overridden by an env var, which always
+# wins over whatever's in this file (MQTT_ENABLED, MQTT_HOST, MQTT_PORT,
+# MQTT_USERNAME, MQTT_PASSWORD, MQTT_TOPIC, MQTT_CLIENT_ID). Same for
+# web.* (WEB_ENABLED/WEB_HOST/WEB_PORT), cleanup.* (CLEANUP_MAX_AGE_DAYS/
+# CLEANUP_MAX_SPACE_MB/CLEANUP_CHECK_INTERVAL_MINUTES), and snippet_dir/
+# ffmpeg_path/log_level (SNIPPET_DIR/FFMPEG_PATH/LOG_LEVEL).
 mqtt:
+  # defaults to false if omitted - this example turns it on since it's
+  # showing a complete, working setup
+  enabled: true
   host: mqtt.local
   port: 1883
   username: bark_detector
   password: changeme
-  # {source} and {label} are substituted per event
-  topic: bark_detector/{source}/event
-  # {source} substituted; published (retained) whenever a source's audio
-  # actually starts/stops flowing - not just when its ffmpeg process starts
-  status_topic: bark_detector/{source}/status
-  # {event} substituted; used for cross-source notifications, currently just
-  # the storage cleanup hitting its space cap (see 'cleanup' below)
-  system_topic: bark_detector/system/{event}
+  # base prefix - event/status/system topics are all derived from it:
+  #   {topic}/{source}/event    (a detection fires)
+  #   {topic}/{source}/status   (a source connects/disconnects; retained)
+  #   {topic}/system/{event}    (e.g. space_limit_reached on cleanup)
+  topic: bark_detector
 
 # where saved WAV snippets are written (mount this as a volume for 
 # persistence or so other tools can read the files)
@@ -26,8 +38,8 @@ web:
 
 # global retention for saved snippets - checked every check_interval_minutes.
 # age-based cleanup runs first, then space-based (oldest-first) if still over
-# max_space_mb; a space-triggered purge also publishes to mqtt.system_topic.
-# set either limit to null to disable it.
+# max_space_mb; a space-triggered purge also publishes an MQTT notification
+# (see 'MQTT topics' in README.md). set either limit to null to disable it.
 cleanup:
   max_age_days: 30
   max_space_mb: 1000
