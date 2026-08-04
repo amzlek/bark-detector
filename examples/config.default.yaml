@@ -1,0 +1,40 @@
+# App config template - entirely optional. Every field below is shown at
+# its default value, commented out; uncomment and edit whatever you want
+# to override. Every field can also be set via an env var instead (see
+# README.md for the full list) - env always wins over this file.
+#
+# Sources aren't here - see examples/sources/ for the per-source file
+# format (one *.yaml per source, under sources_dir).
+
+# mqtt:
+#   enabled: false
+#   host: localhost
+#   port: 1883
+#   username:
+#   password:
+#   topic: bark_detector
+#   client_id: bark_detector
+
+# snippet_dir: /media/bark_snippets
+# log_level: INFO
+
+# web:
+#   enabled: true
+#   host: 0.0.0.0
+#   port: 8099
+
+# cleanup:
+#   max_age_days: 30
+#   max_space_mb: 1000
+#   check_interval_minutes: 15
+
+# sources_dir: /config/sources
+
+# applied to any source file that doesn't specify a given field itself
+# source_defaults:
+#   listen: [bark, bow-wow, howl, yip]
+#   min_volume: 500
+#   pre_capture: 5
+#   post_capture: 5
+#   thresholds:
+#     bark: 0.8

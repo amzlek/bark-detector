@@ -1,0 +1,16 @@
+# Per-source file template - one *.yaml per source under sources_dir.
+# Required: name, type, path. Everything else is optional, shown here at
+# its default, commented out.
+
+name: garage_mic
+type: device
+# find the device name with `arecord -l` (Linux) - format is hw:<card>,<device>
+path: hw:1,0
+
+# listen: [bark, bow-wow, howl, yip]
+# thresholds:
+#   bark: 0.8
+# min_volume: 500
+# pre_capture: 5
+# post_capture: 5
+# input_args: []

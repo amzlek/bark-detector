@@ -1,0 +1,13 @@
+services:
+  bark-detector:
+    image: bark-detector:latest
+    restart: unless-stopped
+    ports:
+      - "8099:8099"
+    volumes:
+      # a directory, not a single file, so additional sources can be added
+      - ./sources:/config/sources
+      - ./snippets:/media/bark_snippets
+    environment:
+      - MQTT_ENABLED=true
+      - MQTT_HOST=192.168.1.10

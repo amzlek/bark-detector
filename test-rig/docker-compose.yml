@@ -76,6 +76,7 @@ services:
         condition: service_healthy
     volumes:
       - ./config.yaml:/config/config.yaml
+      - ./sources:/config/sources
       - ./snippets:/media/bark_snippets
     ports:
       - "8099:8099"

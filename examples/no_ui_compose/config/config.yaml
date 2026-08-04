@@ -1,0 +1,22 @@
+
+mqtt:
+  enabled: true
+  host: mqtt.local
+  port: 1883
+  username: bark_detector
+  password: changeme
+  topic: bark_detector
+
+web:
+  enabled: false
+
+sources_dir: /sources
+
+
+source_defaults:
+  listen: [bark, bow-wow, howl, yip]
+  min_volume: 500
+  pre_capture: 10
+  post_capture: 10
+  thresholds:
+    bark: 0.85

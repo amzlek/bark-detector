@@ -1,0 +1,9 @@
+name: backyard
+type: rtsp
+path: rtsp://mediamtx:8554/backyard
+listen: [bark, bow-wow, howl, yip]
+thresholds:
+  bark: 0.8
+min_volume: 500
+pre_capture: 3
+post_capture: 3

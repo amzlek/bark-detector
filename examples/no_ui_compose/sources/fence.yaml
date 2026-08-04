@@ -1,0 +1,17 @@
+# One *.yaml file per source under sources_dir (default /config/sources,
+# env SOURCES_DIR). The filename doesn't matter - it's just internal
+# storage, picked once and never reused for anything - the 'name:' field
+# below is the source's real identity (shown in the UI, used as the
+# {source} segment of its MQTT topics). name can be anything: spaces,
+# punctuation, unicode all work, e.g. "Front door", "abc:3".
+#
+# Any field you leave out here falls back to source_defaults (see
+# examples/config.default.yaml), then to the app's own built-in
+# default.
+
+name: fence
+type: rtsp
+# a camera's RTSP stream that includes an audio track
+path: rtsp://user:pass@192.168.1.51:554/stream1
+thresholds:
+  bark: 0.75

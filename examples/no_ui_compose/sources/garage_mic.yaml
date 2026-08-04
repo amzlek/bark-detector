@@ -1,0 +1,8 @@
+name: garage_mic
+type: device
+# a USB microphone attached to the host running this container
+# find the device name with `arecord -l` (Linux) - format is hw:<card>,<device>
+path: hw:1,0
+pre_capture: 3
+post_capture: 3
+

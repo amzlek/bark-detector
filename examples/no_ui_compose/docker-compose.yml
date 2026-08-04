@@ -1,0 +1,14 @@
+# config and sources set by YAML (no web UI)
+services:
+  bark-detector:
+    image: bark-detector:latest
+    restart: unless-stopped
+    # needed for USB mic / ALSA device sources; omit if only using rtsp sources
+    devices:
+      - /dev/snd:/dev/snd
+    volumes:
+      - ./config/config.yaml:/config/config.yaml:ro
+      - ./sources:/sources:ro
+      - ./snippets:/media/bark_snippets
+
+
