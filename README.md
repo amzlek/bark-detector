@@ -104,7 +104,8 @@ settings UI and add a source, MQTT stays off until you turn it on.
 
 ### Optional Environment overrides
 If the ENV is set, it will override and replace the value in the config.yaml
-*MQTT*
+
+#### MQTT
 | Var | Default | |
 |---|---|---|
 | `MQTT_ENABLED` | `false` | enable/disable MQTT client |
@@ -114,19 +115,25 @@ If the ENV is set, it will override and replace the value in the config.yaml
 | `MQTT_PASSWORD` | `None` | MQTT client password |
 | `MQTT_TOPIC` | `bark_detector` | MQTT message base topic |
 | `MQTT_CLIENT_ID` | `bark_detector` | MQTT client ID |
-*WEB UI*
+
+
+#### WEB UI
 | Var | Default | |
 |---|---|---|
 | `WEB_ENABLED` | `true` | enable/disable Web UI |
 | `WEB_HOST` | `0.0.0.0` | Web UI host |
 | `WEB_PORT` | `8099` | Web UI port |
-*CLEANUP*
+
+
+#### CLEANUP
 | Var | Default | |
 |---|---|---|
 | `CLEANUP_MAX_AGE_DAYS` | `30` | delete snippet after X days |
 | `CLEANUP_MAX_SPACE_MB` | `100` | trim snippets to remain below X MB  |
 | `CLEANUP_CHECK_INTERVAL_MINUTES` | `15` | run trimming every X minutes |
-*OTHERS*
+
+
+#### OTHERS
 | Var | Default | |
 |---|---|---|
 | `CONFIG_PATH` | `/config/config.yaml` | app config file (see above) |
@@ -134,7 +141,6 @@ If the ENV is set, it will override and replace the value in the config.yaml
 | `AUTH_TOKEN_PATH` | `/config/auth_token` | websocket auth secret, generated on first boot |
 | `SNIPPET_DIR` | `/media/bark_snippets` | folder to save snippets |
 | `LOG_LEVEL` | `INFO` | log level (INFO/WARN/ERROR), parsed at startup|
-
 
 
 ### MQTT topics

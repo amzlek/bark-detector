@@ -242,3 +242,6 @@ __marimo__/
 
 
 *.tmp
+
+# personal scratch notes/future ideas - not project docs, never committed
+/NOTES.local.md
