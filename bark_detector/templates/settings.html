@@ -23,7 +23,7 @@
   <input type="hidden" id="src-original-name">
 
   <label for="src-name">Name</label>
-  <input id="src-name" required placeholder="backyard">
+  <input id="src-name" required placeholder="name">
 
   <label for="src-type">Type</label>
   <select id="src-type">
@@ -243,7 +243,12 @@ async function loadMqtt() {
   document.getElementById('mqtt-host').value = mqtt.host || '';
   document.getElementById('mqtt-port').value = mqtt.port || 1883;
   document.getElementById('mqtt-username').value = mqtt.username || '';
-  document.getElementById('mqtt-password').value = mqtt.password || '';
+  // the real password never comes back from the server (see web.py's
+  // _redact_mqtt) - this field is write-only: leave it blank to keep
+  // whatever's already set, type something to replace it
+  const passwordField = document.getElementById('mqtt-password');
+  passwordField.value = '';
+  passwordField.placeholder = mqtt.has_password ? '(unchanged - leave blank to keep)' : '';
   document.getElementById('mqtt-topic').value = mqtt.topic || 'bark_detector';
   document.getElementById('mqtt-client-id').value = mqtt.client_id || 'bark_detector';
 }
@@ -255,14 +260,18 @@ mqttForm.addEventListener('submit', async (e) => {
     host: document.getElementById('mqtt-host').value.trim(),
     port: parseInt(document.getElementById('mqtt-port').value, 10),
     username: document.getElementById('mqtt-username').value.trim() || null,
-    password: document.getElementById('mqtt-password').value || null,
     topic: document.getElementById('mqtt-topic').value.trim(),
     client_id: document.getElementById('mqtt-client-id').value.trim(),
   };
+  // omitted entirely (not sent as null/empty) when left blank, so the
+  // backend's merge-not-replace update_mqtt() keeps the existing password
+  const password = document.getElementById('mqtt-password').value;
+  if (password) body.password = password;
 
   try {
     await BarkWs.send('mqtt.update', body);
     showStatus(mqttStatus, 'Saved and reconnected.', true);
+    await loadMqtt();
   } catch (err) {
     showStatus(mqttStatus, err.message, false);
   }

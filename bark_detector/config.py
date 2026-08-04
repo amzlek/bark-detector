@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import re
 import secrets
 import tempfile
 from dataclasses import dataclass, field
@@ -21,6 +22,9 @@ DEFAULT_PRE_CAPTURE = 5.0
 DEFAULT_POST_CAPTURE = 5.0
 VALID_SOURCE_TYPES = ("rtsp", "device", "wyoming")
 
+# sentinel: "leave this key out of the persisted file" - see _persisted_value
+_OMIT = object()
+
 
 class ConfigError(ValueError):
     pass
@@ -29,13 +33,20 @@ class ConfigError(ValueError):
 _T = TypeVar("_T", bool, int, float, str)
 
 
-def _env_override(key: str, current: _T) -> _T:
+def _env_override(key: str, current: _T, *, in_file: bool = False) -> _T:
     """ENV always wins over the config file. Casts the env var's string
     value to match `current`'s type - so this only works for fields that
-    are never None; see _env_override_optional_float for nullable numerics."""
+    are never None; see _env_override_optional_float for nullable numerics.
+
+    in_file=True means the config file explicitly set this value - if the
+    env var is ALSO set, that file value is about to be silently ignored,
+    which is worth a warning since it's easy to forget an env var is still
+    in scope after editing the file and wonder why the edit didn't stick."""
     raw = os.environ.get(key)
     if raw is None:
         return current
+    if in_file:
+        logger.warning("%s is set in the config file, but env var %s overrides it", key.lower(), key)
     if isinstance(current, bool):
         return raw.strip().lower() in ("1", "true", "yes", "on")  # type: ignore[return-value]
     if isinstance(current, int):
@@ -45,15 +56,23 @@ def _env_override(key: str, current: _T) -> _T:
     return raw  # type: ignore[return-value]
 
 
-def _env_override_optional_str(key: str, current: str | None) -> str | None:
+def _env_override_optional_str(
+    key: str, current: str | None, *, in_file: bool = False
+) -> str | None:
     """Like _env_override, but for nullable string fields (username/
     password) where `current` may already be None - constrained TypeVars
     can't include None as an option."""
     raw = os.environ.get(key)
-    return current if raw is None else raw
+    if raw is None:
+        return current
+    if in_file:
+        logger.warning("%s is set in the config file, but env var %s overrides it", key.lower(), key)
+    return raw
 
 
-def _env_override_optional_float(key: str, current: float | None) -> float | None:
+def _env_override_optional_float(
+    key: str, current: float | None, *, in_file: bool = False
+) -> float | None:
     """Like _env_override, but for nullable numeric fields (e.g. cleanup
     limits) where `current` may already be None - so the cast can't be
     inferred from it. "none"/"null"/"" (case-insensitive) disables the
@@ -61,6 +80,8 @@ def _env_override_optional_float(key: str, current: float | None) -> float | Non
     raw = os.environ.get(key)
     if raw is None:
         return current
+    if in_file:
+        logger.warning("%s is set in the config file, but env var %s overrides it", key.lower(), key)
     if raw.strip().lower() in ("none", "null", ""):
         return None
     return float(raw)
@@ -122,12 +143,15 @@ class WebConfig:
     enabled: bool = True
     host: str = "0.0.0.0"
     port: int = 8099
-    # gates the websocket (settings CRUD + live status) - the browser only
+    # generated once and stored in its own file (see load_auth_token/
+    # save_auth_token), NOT in config.yaml - it doesn't have a meaningful
+    # "default" to compare against for the non-default-only persistence
+    # model the rest of this module uses (see _persisted_value), and it
+    # needs to persist regardless of whether any other setting does.
+    # Gates the websocket (settings CRUD + live status); the browser only
     # learns it because index.html/settings.html render it in server-side,
     # so a third-party page can't open a websocket to us even though the
-    # plain GET routes stay open. Empty means "not generated yet"; see
-    # _build_web_config, which fills in a random one and main.py's
-    # self-heal write-back persists it.
+    # plain GET routes stay open.
     auth_token: str = ""
 
 
@@ -135,7 +159,7 @@ class WebConfig:
 class CleanupConfig:
     # any of these can be set to null/None in YAML to disable that limit
     max_age_days: float | None = 30.0
-    max_space_mb: float | None = 1000.0
+    max_space_mb: float | None = 100.0
     check_interval_minutes: float = 15.0
 
 
@@ -143,11 +167,29 @@ class CleanupConfig:
 class Config:
     mqtt: MqttConfig
     sources: list[SourceConfig]
+    # where load_sources()/save_source() read/write the one-file-per-source
+    # directory, and where the settings UI persists add/edit/delete - a
+    # real field (not just a load_config() parameter) so callers can read
+    # back the fully-resolved value (file/env/default) after loading,
+    # rather than needing to duplicate that resolution themselves
+    sources_dir: str = "/config/sources"
+    # applied when a *.yaml file under sources_dir doesn't specify a field -
+    # lives here (not in a per-source file) since it's a policy shared
+    # across sources, not data belonging to any one of them. Never applied
+    # to sources added/edited through the settings UI, which always send
+    # every field explicit already.
+    source_defaults: dict = field(default_factory=dict)
     snippet_dir: str = "/media/bark_snippets"
     ffmpeg_path: str = "ffmpeg"
     log_level: str = "INFO"
     web: WebConfig = field(default_factory=WebConfig)
     cleanup: CleanupConfig = field(default_factory=CleanupConfig)
+    # where load_auth_token()/save_auth_token() read/write the websocket
+    # secret - resolved with the same file > env > default precedence as
+    # sources_dir, and kept as a field for the same reason: main.py needs
+    # the final resolved value (to know where to persist a freshly-
+    # generated token) without re-deriving it itself.
+    auth_token_path: str = "/config/auth_token"
 
     @property
     def db_path(self) -> str:
@@ -156,13 +198,26 @@ class Config:
 
 def build_mqtt_config(raw: dict) -> MqttConfig:
     return MqttConfig(
-        enabled=_env_override("MQTT_ENABLED", bool(raw.get("enabled", MqttConfig.enabled))),
-        host=_env_override("MQTT_HOST", raw.get("host", MqttConfig.host)),
-        port=_env_override("MQTT_PORT", int(raw.get("port", MqttConfig.port))),
-        username=_env_override_optional_str("MQTT_USERNAME", raw.get("username")),
-        password=_env_override_optional_str("MQTT_PASSWORD", raw.get("password")),
-        topic=_env_override("MQTT_TOPIC", raw.get("topic", MqttConfig.topic)),
-        client_id=_env_override("MQTT_CLIENT_ID", raw.get("client_id", MqttConfig.client_id)),
+        enabled=_env_override(
+            "MQTT_ENABLED", bool(raw.get("enabled", MqttConfig.enabled)), in_file="enabled" in raw
+        ),
+        host=_env_override("MQTT_HOST", raw.get("host", MqttConfig.host), in_file="host" in raw),
+        port=_env_override(
+            "MQTT_PORT", int(raw.get("port", MqttConfig.port)), in_file="port" in raw
+        ),
+        # "or None" normalizes an empty string (e.g. a blank form field) to
+        # None, matching the dataclass default - otherwise "" vs None would
+        # be treated as different values by dump_config's default check
+        username=_env_override_optional_str(
+            "MQTT_USERNAME", raw.get("username") or None, in_file="username" in raw
+        ),
+        password=_env_override_optional_str(
+            "MQTT_PASSWORD", raw.get("password") or None, in_file="password" in raw
+        ),
+        topic=_env_override("MQTT_TOPIC", raw.get("topic", MqttConfig.topic), in_file="topic" in raw),
+        client_id=_env_override(
+            "MQTT_CLIENT_ID", raw.get("client_id", MqttConfig.client_id), in_file="client_id" in raw
+        ),
     )
 
 
@@ -173,21 +228,29 @@ def build_source_config(raw: dict, defaults: dict | None = None) -> SourceConfig
         if required not in raw:
             raise ConfigError(f"source is missing required field '{required}': {raw}")
 
+    name = raw["name"]
+    if not name or name != name.strip():
+        raise ConfigError(f"source name {name!r} must be non-empty with no leading/trailing whitespace")
+    if "/" in name:
+        raise ConfigError(f"source name {name!r} can't contain '/' (it's used as an MQTT topic segment)")
+    if any(ord(c) < 0x20 for c in name):
+        raise ConfigError(f"source name {name!r} can't contain control characters")
+
     source_type = raw["type"]
     if source_type not in VALID_SOURCE_TYPES:
         raise ConfigError(
-            f"source '{raw['name']}' has invalid type '{source_type}', "
+            f"source '{name}' has invalid type '{source_type}', "
             f"must be one of {VALID_SOURCE_TYPES}"
         )
 
     if source_type == "wyoming":
         raise ConfigError(
-            f"source '{raw['name']}': the 'wyoming' source type "
+            f"source '{name}': the 'wyoming' source type "
             "(e.g. for an M5 Atom Echo) is not implemented yet"
         )
 
     return SourceConfig(
-        name=raw["name"],
+        name=name,
         type=source_type,
         path=raw["path"],
         listen=raw.get("listen", defaults.get("listen", list(DEFAULT_LISTEN))),
@@ -205,18 +268,19 @@ def build_source_config(raw: dict, defaults: dict | None = None) -> SourceConfig
     )
 
 
-def _build_web_config(raw: dict) -> WebConfig:
-    # not env-overridable (unlike the rest of this function) - it's
-    # generated once and self-healed into config.yaml purely so restarts
-    # don't invalidate every already-open browser tab's websocket
-    # connection, not meant to be hand-set or injected from outside
-    token = raw.get("auth_token") or secrets.token_urlsafe(32)
+def _build_web_config(raw: dict, auth_token: str) -> WebConfig:
+    if not auth_token:
+        auth_token = secrets.token_urlsafe(32)
 
     return WebConfig(
-        enabled=_env_override("WEB_ENABLED", bool(raw.get("enabled", WebConfig.enabled))),
-        host=_env_override("WEB_HOST", raw.get("host", WebConfig.host)),
-        port=_env_override("WEB_PORT", int(raw.get("port", WebConfig.port))),
-        auth_token=token,
+        enabled=_env_override(
+            "WEB_ENABLED", bool(raw.get("enabled", WebConfig.enabled)), in_file="enabled" in raw
+        ),
+        host=_env_override("WEB_HOST", raw.get("host", WebConfig.host), in_file="host" in raw),
+        port=_env_override(
+            "WEB_PORT", int(raw.get("port", WebConfig.port)), in_file="port" in raw
+        ),
+        auth_token=auth_token,
     )
 
 
@@ -229,111 +293,316 @@ def _build_cleanup_config(raw: dict) -> CleanupConfig:
 
     return CleanupConfig(
         max_age_days=_env_override_optional_float(
-            "CLEANUP_MAX_AGE_DAYS", _optional_float("max_age_days", CleanupConfig.max_age_days)
+            "CLEANUP_MAX_AGE_DAYS",
+            _optional_float("max_age_days", CleanupConfig.max_age_days),
+            in_file="max_age_days" in raw,
         ),
         max_space_mb=_env_override_optional_float(
-            "CLEANUP_MAX_SPACE_MB", _optional_float("max_space_mb", CleanupConfig.max_space_mb)
+            "CLEANUP_MAX_SPACE_MB",
+            _optional_float("max_space_mb", CleanupConfig.max_space_mb),
+            in_file="max_space_mb" in raw,
         ),
         check_interval_minutes=_env_override(
             "CLEANUP_CHECK_INTERVAL_MINUTES",
             float(raw.get("check_interval_minutes", CleanupConfig.check_interval_minutes)),
+            in_file="check_interval_minutes" in raw,
         ),
     )
 
 
-def load_config(path: str) -> Config:
+def load_sources(sources_dir: str, defaults: dict | None = None) -> list[SourceConfig]:
+    """One *.yaml file per source in sources_dir, each with its own explicit
+    'name:' field - the filename itself is just an opaque storage detail
+    (a slug picked once when the source is first saved, see save_source),
+    not the source's real identity, so a name can be anything (spaces,
+    punctuation, unicode - e.g. 'abc:3') without having to also be a valid
+    filename. A missing directory just means zero sources."""
+    if not os.path.isdir(sources_dir):
+        return []
+
+    sources = []
+    seen_names: set[str] = set()
+    for filename in sorted(os.listdir(sources_dir)):
+        if not filename.endswith(".yaml"):
+            continue
+        with open(os.path.join(sources_dir, filename), "r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+        source = build_source_config(raw, defaults)
+        if source.name in seen_names:
+            raise ConfigError(f"duplicate source name '{source.name}' (in {filename})")
+        seen_names.add(source.name)
+        sources.append(source)
+    return sources
+
+
+def _slugify(name: str) -> str:
+    """Best-effort filesystem-safe stand-in for a source's name, used only
+    to pick a NEW file's name (see save_source) - never recomputed for an
+    existing source, so renaming one never moves its file."""
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_-")
+    return slug or "source"
+
+
+def _find_source_path(name: str, sources_dir: str) -> str | None:
+    """Filenames aren't derived from the name (see load_sources), so the
+    only reliable way to find the file backing a given source is to check
+    each file's actual 'name:' content."""
+    if not os.path.isdir(sources_dir):
+        return None
+    for filename in os.listdir(sources_dir):
+        if not filename.endswith(".yaml"):
+            continue
+        path = os.path.join(sources_dir, filename)
+        with open(path, "r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+        if raw.get("name") == name:
+            return path
+    return None
+
+
+def _new_source_path(name: str, sources_dir: str) -> str:
+    slug = _slugify(name)
+    path = os.path.join(sources_dir, f"{slug}.yaml")
+    suffix = 2
+    while os.path.exists(path):
+        path = os.path.join(sources_dir, f"{slug}-{suffix}.yaml")
+        suffix += 1
+    return path
+
+
+def load_auth_token(path: str) -> str:
+    """Pure read - "" if the file doesn't exist yet or is empty. Never
+    writes; see save_auth_token, called explicitly by main.py only the
+    first time (when this returns "")."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return ""
+
+
+def save_auth_token(token: str, path: str) -> None:
+    _atomic_write(path, ".auth-token-", lambda f: f.write(token))
+
+
+def load_config(
+    config_path: str,
+    default_sources_dir: str = Config.sources_dir,
+    default_auth_token_path: str = Config.auth_token_path,
+) -> Config:
     """Tolerant by design: a missing file, an empty file, or a file missing
     whole sections are all fine - every gap is filled with its default (or
     an env var override, which always wins regardless of what's in the
-    file). Only genuinely malformed values (e.g. an unknown source type,
-    a duplicate source name) still raise ConfigError. Callers that want the
-    resolved config persisted back to disk (so a sparse/missing file becomes
-    a fully populated one) should follow up with save_config() - this
-    function itself never writes, so it stays safe to call on arbitrary
-    paths (tests, an example file, etc.) without side effects."""
+    file). Only genuinely malformed values (e.g. an unknown source type or
+    name) still raise ConfigError. This function never writes anything -
+    safe to call on arbitrary paths (tests, an example file, etc.) without
+    side effects. Persisting changes is a separate, explicit step: see
+    save_config/save_source/save_auth_token, all called only when the
+    settings UI actually changes something (or, for the auth token, the
+    first time one needs to be generated) - never automatically just
+    because the app booted.
+
+    Config is split three ways:
+      - config_path: app settings (mqtt/web/cleanup/sources_dir/
+        auth_token_path/etc) - entirely optional, every field can come
+        from an env var instead, so a docker deployment can skip mounting
+        this file at all. config_path itself can't be one of those fields
+        (you'd need to already know it to find the file that would tell
+        you it) - it's the one thing main.py resolves before ever calling
+        this function.
+      - sources_dir: one *.yaml per source (see load_sources) - sources
+        aren't env-var configurable themselves (no clean way to express a
+        dynamic list that way), so they need somewhere to persist to
+        regardless; where is configurable, same as everything else
+        (SOURCES_DIR / sources_dir: in the file / default_sources_dir).
+      - auth_token_path: the websocket auth secret (see load_auth_token) -
+        split out from the rest of config_path's content because it
+        doesn't fit the "only non-default values are written" model
+        save_config uses (see dump_config): it has no meaningful default,
+        and unlike everything else it must persist even when nothing else
+        does. Where it lives is still configurable the same way
+        (AUTH_TOKEN_PATH / auth_token_path: in the file / the parameter
+        here).
+    """
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             raw = yaml.safe_load(f) or {}
     except FileNotFoundError:
         raw = {}
 
-    defaults = raw.get("defaults", {})
-    names = set()
-    sources = []
-    for raw_source in raw.get("sources") or []:
-        source = build_source_config(raw_source, defaults)
-        if source.name in names:
-            raise ConfigError(f"duplicate source name '{source.name}'")
-        names.add(source.name)
-        sources.append(source)
+    sources_dir = _env_override(
+        "SOURCES_DIR", raw.get("sources_dir", default_sources_dir), in_file="sources_dir" in raw
+    )
+    auth_token_path = _env_override(
+        "AUTH_TOKEN_PATH",
+        raw.get("auth_token_path", default_auth_token_path),
+        in_file="auth_token_path" in raw,
+    )
+    source_defaults = raw.get("source_defaults", {})
 
     return Config(
         mqtt=build_mqtt_config(raw.get("mqtt", {})),
-        sources=sources,
-        snippet_dir=_env_override("SNIPPET_DIR", raw.get("snippet_dir", Config.snippet_dir)),
-        ffmpeg_path=_env_override("FFMPEG_PATH", raw.get("ffmpeg_path", Config.ffmpeg_path)),
-        log_level=_env_override("LOG_LEVEL", raw.get("log_level", Config.log_level)),
-        web=_build_web_config(raw.get("web", {})),
+        sources=load_sources(sources_dir, source_defaults),
+        sources_dir=sources_dir,
+        source_defaults=source_defaults,
+        snippet_dir=_env_override(
+            "SNIPPET_DIR", raw.get("snippet_dir", Config.snippet_dir), in_file="snippet_dir" in raw
+        ),
+        ffmpeg_path=raw.get("ffmpeg_path", Config.ffmpeg_path),
+        log_level=_env_override(
+            "LOG_LEVEL", raw.get("log_level", Config.log_level), in_file="log_level" in raw
+        ),
+        web=_build_web_config(raw.get("web", {}), load_auth_token(auth_token_path)),
         cleanup=_build_cleanup_config(raw.get("cleanup", {})),
+        auth_token_path=auth_token_path,
     )
 
 
+def _persisted_value(current, default, env_key: str | None):
+    """Returns current if it belongs in the persisted file, or _OMIT if it
+    should be left out - either because it's still at its default (no
+    point cluttering the file with it; config.example.yaml documents the
+    full list of what's available) or because it's currently sourced from
+    an env var, which will keep winning on every future load regardless of
+    what the file says - writing it back would just leak it into a
+    plaintext file for no functional benefit. Matters most for secrets
+    like MQTT_PASSWORD, but applied uniformly to every field for
+    consistency (see dump_config)."""
+    if env_key is not None and os.environ.get(env_key) is not None:
+        return _OMIT
+    if current == default:
+        return _OMIT
+    return current
+
+
+def _drop_omitted(d: dict) -> dict:
+    return {k: v for k, v in d.items() if v is not _OMIT}
+
+
 def dump_config(config: Config) -> dict:
-    """Serialize a Config back to the same shape load_config() reads.
-    No 'defaults' section is written back - every source is fully explicit."""
-    return {
-        "mqtt": {
-            "enabled": config.mqtt.enabled,
-            "host": config.mqtt.host,
-            "port": config.mqtt.port,
-            "username": config.mqtt.username,
-            "password": config.mqtt.password,
-            "topic": config.mqtt.topic,
-            "client_id": config.mqtt.client_id,
-        },
-        "snippet_dir": config.snippet_dir,
-        "ffmpeg_path": config.ffmpeg_path,
-        "log_level": config.log_level,
-        "web": {
-            "enabled": config.web.enabled,
-            "host": config.web.host,
-            "port": config.web.port,
-            "auth_token": config.web.auth_token,
-        },
-        "cleanup": {
-            "max_age_days": config.cleanup.max_age_days,
-            "max_space_mb": config.cleanup.max_space_mb,
-            "check_interval_minutes": config.cleanup.check_interval_minutes,
-        },
-        "sources": [
+    """Serialize the app-level part of a Config to the shape load_config()
+    reads - but only fields that differ from their default AND aren't
+    currently sourced from an env var (see _persisted_value). That keeps
+    the file a lean diff of your actual overrides instead of a full dump
+    of every field, and guarantees a secret sourced from env never gets
+    duplicated into it. Sources themselves aren't included here - each is
+    its own file under sources_dir (see save_source) - but where
+    sources_dir/auth_token_path point IS included, same as any other
+    setting, so a hand-set value survives an unrelated save (e.g. the
+    settings UI saving MQTT config) instead of silently reverting."""
+    default_mqtt = MqttConfig()
+    default_web = WebConfig()
+    default_cleanup = CleanupConfig()
+
+    result = {
+        "mqtt": _drop_omitted(
             {
-                "name": s.name,
-                "type": s.type,
-                "path": s.path,
-                "listen": s.listen,
-                "thresholds": s.thresholds,
-                "min_volume": s.min_volume,
-                "pre_capture": s.pre_capture,
-                "post_capture": s.post_capture,
-                "input_args": s.input_args,
+                "enabled": _persisted_value(config.mqtt.enabled, default_mqtt.enabled, "MQTT_ENABLED"),
+                "host": _persisted_value(config.mqtt.host, default_mqtt.host, "MQTT_HOST"),
+                "port": _persisted_value(config.mqtt.port, default_mqtt.port, "MQTT_PORT"),
+                "username": _persisted_value(
+                    config.mqtt.username, default_mqtt.username, "MQTT_USERNAME"
+                ),
+                "password": _persisted_value(
+                    config.mqtt.password, default_mqtt.password, "MQTT_PASSWORD"
+                ),
+                "topic": _persisted_value(config.mqtt.topic, default_mqtt.topic, "MQTT_TOPIC"),
+                "client_id": _persisted_value(
+                    config.mqtt.client_id, default_mqtt.client_id, "MQTT_CLIENT_ID"
+                ),
             }
-            for s in config.sources
-        ],
+        ),
+        "sources_dir": _persisted_value(config.sources_dir, Config.sources_dir, "SOURCES_DIR"),
+        "auth_token_path": _persisted_value(
+            config.auth_token_path, Config.auth_token_path, "AUTH_TOKEN_PATH"
+        ),
+        "source_defaults": config.source_defaults,
+        "snippet_dir": _persisted_value(config.snippet_dir, Config.snippet_dir, "SNIPPET_DIR"),
+        "ffmpeg_path": _persisted_value(config.ffmpeg_path, Config.ffmpeg_path, None),
+        "log_level": _persisted_value(config.log_level, Config.log_level, "LOG_LEVEL"),
+        "web": _drop_omitted(
+            {
+                "enabled": _persisted_value(config.web.enabled, default_web.enabled, "WEB_ENABLED"),
+                "host": _persisted_value(config.web.host, default_web.host, "WEB_HOST"),
+                "port": _persisted_value(config.web.port, default_web.port, "WEB_PORT"),
+            }
+        ),
+        "cleanup": _drop_omitted(
+            {
+                "max_age_days": _persisted_value(
+                    config.cleanup.max_age_days, default_cleanup.max_age_days, "CLEANUP_MAX_AGE_DAYS"
+                ),
+                "max_space_mb": _persisted_value(
+                    config.cleanup.max_space_mb, default_cleanup.max_space_mb, "CLEANUP_MAX_SPACE_MB"
+                ),
+                "check_interval_minutes": _persisted_value(
+                    config.cleanup.check_interval_minutes,
+                    default_cleanup.check_interval_minutes,
+                    "CLEANUP_CHECK_INTERVAL_MINUTES",
+                ),
+            }
+        ),
+    }
+    return _drop_omitted(result)
+
+
+def _dump_source(source: SourceConfig) -> dict:
+    """Serialize one source back to the shape load_sources() reads."""
+    return {
+        "name": source.name,
+        "type": source.type,
+        "path": source.path,
+        "listen": source.listen,
+        "thresholds": source.thresholds,
+        "min_volume": source.min_volume,
+        "pre_capture": source.pre_capture,
+        "post_capture": source.post_capture,
+        "input_args": source.input_args,
     }
 
 
-def save_config(config: Config, path: str) -> None:
-    """Write the config back to disk atomically (write to a temp file in the
-    same directory, then rename) so a crash mid-write can't corrupt it."""
+def _atomic_write(path: str, prefix: str, write_fn) -> None:
+    """Write to a temp file in the same directory, then rename, so a crash
+    mid-write can't corrupt whatever was at `path` before."""
     directory = os.path.dirname(os.path.abspath(path)) or "."
     os.makedirs(directory, exist_ok=True)
 
-    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".config-", suffix=".yaml")
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=prefix)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            yaml.safe_dump(dump_config(config), f, sort_keys=False)
+            write_fn(f)
         os.replace(tmp_path, path)
     except BaseException:
         with contextlib.suppress(OSError):
             os.remove(tmp_path)
         raise
+
+
+def _atomic_write_yaml(data: dict, path: str, prefix: str) -> None:
+    _atomic_write(path, prefix, lambda f: yaml.safe_dump(data, f, sort_keys=False))
+
+
+def save_config(config: Config, path: str) -> None:
+    """Write the app-level config back to disk atomically. Does not touch
+    sources_dir or the auth token file - see dump_config()."""
+    _atomic_write_yaml(dump_config(config), path, ".config-")
+
+
+def save_source(source: SourceConfig, sources_dir: str) -> None:
+    """Overwrites the existing file for source.name if one exists, otherwise
+    creates a new one (see _new_source_path) - so once a source has a file,
+    that file's name never changes even across a rename, only the 'name:'
+    field inside it does. Callers are responsible for calling
+    delete_source_file() on the OLD name first if this is a rename to a
+    different name (see AppController.update_source), otherwise the old
+    file would be left behind alongside the new one."""
+    os.makedirs(sources_dir, exist_ok=True)
+    path = _find_source_path(source.name, sources_dir) or _new_source_path(source.name, sources_dir)
+    _atomic_write_yaml(_dump_source(source), path, ".source-")
+
+
+def delete_source_file(name: str, sources_dir: str) -> None:
+    path = _find_source_path(name, sources_dir)
+    if path is not None:
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(path)

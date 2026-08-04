@@ -52,8 +52,6 @@ class EventStore:
                 ),
             )
             self._conn.commit()
-            # lastrowid is only None when the last statement wasn't an
-            # INSERT - the assert just narrows the type for the checker
             assert cur.lastrowid is not None
             return cur.lastrowid
 

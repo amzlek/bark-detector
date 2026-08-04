@@ -1,10 +1,12 @@
 """Owns all live application state: config, running per-source workers, the
 MQTT publisher, and the event store. Both main.py (at startup) and the
-settings API (at runtime) go through this so the config file, in-memory
+settings API (at runtime) go through this so the on-disk config (the app
+config file plus one *.yaml per source under sources_dir), in-memory
 config, and live worker threads never drift out of sync with each other."""
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import threading
 import time
@@ -17,7 +19,9 @@ from .config import (
     SourceConfig,
     build_mqtt_config,
     build_source_config,
+    delete_source_file,
     save_config,
+    save_source,
 )
 from .event_store import EventStore
 from .mqtt_publisher import MqttPublisher
@@ -44,8 +48,9 @@ class _ManagedWorker:
 
 
 class AppController:
-    def __init__(self, config: Config, config_path: str):
+    def __init__(self, config: Config, config_path: str, sources_dir: str):
         self.config_path = config_path
+        self.sources_dir = sources_dir
         self.config = config
         self._lock = threading.RLock()
         self._workers: dict[str, _ManagedWorker] = {}
@@ -187,7 +192,7 @@ class AppController:
 
             source = build_source_config(raw)
             self.config.sources.append(source)
-            self._persist()
+            save_source(source, self.sources_dir)
             self._start_worker(source)
             return source
 
@@ -208,7 +213,9 @@ class AppController:
                 raise ConfigError(f"source '{new_source.name}' already exists")
 
             self.config.sources[index] = new_source
-            self._persist()
+            save_source(new_source, self.sources_dir)
+            if new_source.name != name:
+                delete_source_file(name, self.sources_dir)
 
         # restart outside the lock: join() can block briefly and shouldn't
         # hold up unrelated reads (e.g. list_sources) while it does
@@ -223,7 +230,7 @@ class AppController:
             if len(remaining) == len(self.config.sources):
                 raise ConfigError(f"source '{name}' not found")
             self.config.sources = remaining
-            self._persist()
+            delete_source_file(name, self.sources_dir)
         self._stop_worker(name)
 
     def test_source(self, raw: dict) -> tuple[bool, str]:
@@ -245,8 +252,14 @@ class AppController:
             return self.config.mqtt
 
     def update_mqtt(self, raw: dict) -> MqttConfig:
+        """Partial update: any field raw doesn't include keeps its current
+        value, rather than resetting to MqttConfig's bare defaults - so the
+        settings UI can omit 'password' entirely to mean "leave it alone"
+        (see settings.html/web.py, which never send the real password back
+        to the browser to begin with) without that clearing it out."""
         with self._lock:
-            new_mqtt = build_mqtt_config(raw)
+            merged = {**dataclasses.asdict(self.config.mqtt), **raw}
+            new_mqtt = build_mqtt_config(merged)
             self.config.mqtt = new_mqtt
             self._persist()
 

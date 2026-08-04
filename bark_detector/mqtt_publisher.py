@@ -71,13 +71,6 @@ class MqttPublisher:
             logger.info(
                 "connecting to MQTT broker %s:%d", self.config.host, self.config.port
             )
-            # connect_async(), not connect(): the blocking call raises
-            # (crashing the whole app - confirmed by actually booting with
-            # an unreachable default broker) if the broker isn't up yet.
-            # connect_async() + loop_start() hands the attempt to paho's own
-            # background thread, which retries with backoff - the broker
-            # being briefly or permanently down should never take the app
-            # down with it.
             self.client.connect_async(self.config.host, self.config.port)
             self.client.loop_start()
 
@@ -93,10 +86,6 @@ class MqttPublisher:
             self.client = self._build_client(new_config)
             self.config = new_config
 
-        # the old client's on_disconnect may not fire (or may be delayed)
-        # once we swap self.client out from under it, so drop the flag
-        # ourselves - the new client's on_connect will flip it back once
-        # it actually connects
         self._set_connected(False)
 
         with self._lock:
@@ -107,9 +96,6 @@ class MqttPublisher:
             logger.info(
                 "reconfiguring MQTT broker -> %s:%d", new_config.host, new_config.port
             )
-            # see connect() above: async + background retry, not a blocking
-            # call that would surface as a raw 500 from the settings API if
-            # the newly-entered broker address is briefly unreachable
             self.client.connect_async(self.config.host, self.config.port)
             self.client.loop_start()
 

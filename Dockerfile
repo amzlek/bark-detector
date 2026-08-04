@@ -44,9 +44,17 @@ COPY audio-labelmap.txt /app/audio-labelmap.txt
 COPY bark_detector /app/bark_detector
 
 # safe to boot with nothing mounted at /config: a missing/empty config.yaml
-# self-heals to defaults (zero sources, web UI on, MQTT off until you point
-# it at a real broker) instead of failing - see bark_detector/config.py
+# or sources dir runs on defaults (zero sources, web UI on, MQTT off until
+# you point it at a real broker) instead of failing - see
+# bark_detector/config.py. CONFIG_PATH (app settings: mqtt/web/cleanup/etc)
+# and SOURCES_DIR (one *.yaml per source) are separate so CONFIG_PATH can
+# be skipped entirely for a deployment that sets everything via env vars.
+# AUTH_TOKEN_PATH is split out too - it's a generated secret (gates the
+# settings websocket), not a setting, and needs to persist across restarts
+# even when nothing else does.
 ENV CONFIG_PATH=/config/config.yaml
+ENV SOURCES_DIR=/config/sources
+ENV AUTH_TOKEN_PATH=/config/auth_token
 VOLUME ["/config", "/media"]
 EXPOSE 8099
 

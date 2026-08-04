@@ -198,10 +198,10 @@ def _dispatch(controller: AppController, ws, raw) -> None:
             ok, message = controller.test_source(payload)
             _reply(ws, action, req_id, {"ok": ok, "message": message})
         elif action == "mqtt.get":
-            _reply(ws, action, req_id, dataclasses.asdict(controller.get_mqtt()))
+            _reply(ws, action, req_id, _redact_mqtt(controller.get_mqtt()))
         elif action == "mqtt.update":
             mqtt_config = controller.update_mqtt(payload)
-            _reply(ws, action, req_id, dataclasses.asdict(mqtt_config))
+            _reply(ws, action, req_id, _redact_mqtt(mqtt_config))
         else:
             _fail(ws, action, req_id, f"unknown message type '{action}'")
     except ConfigError as exc:
@@ -209,6 +209,18 @@ def _dispatch(controller: AppController, ws, raw) -> None:
     except Exception:
         logger.exception("unhandled error processing ws message '%s'", action)
         _fail(ws, action, req_id, "internal error")
+
+
+def _redact_mqtt(mqtt_config) -> dict:
+    """The real password never goes to the browser, not even once - the
+    settings page only needs to know whether one is already set (to show
+    a hint) and never needs to display or resubmit the actual value (see
+    templates/settings.html, which treats the password field as write-
+    only: blank means "leave it alone", handled by
+    AppController.update_mqtt's merge-not-replace semantics)."""
+    data = dataclasses.asdict(mqtt_config)
+    data["has_password"] = bool(data.pop("password"))
+    return data
 
 
 def _reply(ws, action, req_id, data) -> None:

@@ -14,7 +14,7 @@ dependency on Frigate's video/recording/app framework.
 ## Features
 
 - **Pluggable audio sources**: an RTSP camera's audio track, or a USB/ALSA
-  microphone. (A Wyoming-protocol source, e.g. for an M5 Atom Echo, is
+  microphone (untested). (A Wyoming-protocol source, e.g. for an M5 Atom Echo, is
   planned but not implemented yet.)
 - **Configurable detection** per source: which labels to listen for,
   per-label thresholds, minimum volume gate, and pre/post-capture window for
@@ -25,7 +25,7 @@ dependency on Frigate's video/recording/app framework.
     actually flowing, not just the capture process being alive)
   - a notification when storage cleanup has to evict snippets to stay under
     its space cap
-- **Web UI** (Flask, no separate frontend build step):
+- **Web UI** (Flask):
   - `/` - event log with an inline player per detection, plus a live status
     panel (websocket connection, MQTT broker, per-source connectivity)
   - `/settings` - add/edit/delete sources (with a live connectivity badge
@@ -34,40 +34,108 @@ dependency on Frigate's video/recording/app framework.
     space available)
   - live status and all settings CRUD (add/edit/delete source, update MQTT)
     go over a websocket at `/ws`, gated by an auth token the app generates
-    itself and self-heals into `config.yaml` on first boot (see
-    `config.example.yaml`). Everything else - `/api/events`, `/api/sources`
-    (read-only), `/api/stats`, `/snippets/*` - stays plain, unauthenticated
-    HTTP
+    itself the first time it boots and writes to its own file (see
+    `AUTH_TOKEN_PATH` below) - not a setting, so it's not in config.yaml
+    and can't be set via env var. Everything else - `/api/events`,
+    `/api/sources` (read-only), `/api/stats`, `/snippets/*` - stays plain,
+    unauthenticated HTTP
 - **Automatic retention**: age- and space-based cleanup of saved snippets,
   checked on an interval.
 - **Minimal image**: `python:3.14-slim` + a static ffmpeg binary (no apt
   codec tree) + [ai-edge-litert](https://pypi.org/project/ai-edge-litert/)
-  (Google's official TFLite runtime, prebuilt wheel) - no TensorFlow, no
-  Node/React build stage. `linux/amd64` only for now (see "Status / not yet
-  done" below).
+  (Google's official TFLite runtime, prebuilt wheel).
+  `linux/amd64` only for now (see "Status / not yet done" below).
 
 ## Quick start
 
+Build the image once from the repo root:
+
 ```bash
-docker compose up --build
+docker build -t bark-detector:latest .
 ```
 
-That's it - no config file required first. Defaults are: zero sources, web
-UI on, MQTT off. Open the settings UI and add a source; MQTT stays off
-until you turn it on there (or in config.yaml, or `MQTT_ENABLED=true`).
+Then pick one of two ready-to-run examples under `examples/` (both just
+reference `image: bark-detector:latest` - neither builds it themselves):
 
-- Event log / settings UI: http://localhost:8099
-- Saved snippets and the event log db land in `./snippets` (bind-mounted)
-- Config lives at `./config/config.yaml` (bind-mounted as a directory, not
-  a single file - see the comment in `docker-compose.yml` for why). A
-  missing/empty/partial file self-heals into a fully-populated one with
-  defaults on first boot, and the settings UI keeps it updated after that
-  whenever you add/edit/delete a source or change MQTT settings.
+- **`examples/basic_compose/`** - sources managed through the settings UI,
+  a couple of env vars for MQTT. Start with:
+  ```bash
+  docker compose -f examples/basic_compose/docker-compose.yml up
+  ```
+- **`examples/no_ui_compose/`** - MQTT and sources fully specified as YAML
+  files (`config/config.yaml` + `sources/*.yaml`), nothing via env vars,
+  port 8099 not published. See `examples/config.default.yaml` for every
+  app-config field spelled out (commented, at its default) as a starting
+  template, and `examples/sources/` for the per-source file format.
+  ```bash
+  docker compose -f examples/no_ui_compose/docker-compose.yml up
+  ```
 
-Prefer to hand-configure things upfront instead? Copy `config.example.yaml`
-to `./config/config.yaml` before starting - every field is documented
-there, including which env var overrides it. Top-level sections: `mqtt`,
-`sources`, `web`, `cleanup`, plus `snippet_dir`, `ffmpeg_path`, `log_level`.
+Either way: zero sources and MQTT off is a valid starting state - open the
+settings UI and add a source, MQTT stays off until you turn it on.
+
+- Event log / settings UI: http://localhost:8099 (unless disabled)
+- Saved snippets and the event log db land in the bind-mounted snippets volume
+- Config is split three ways, so nothing gets mixed up between "a setting"
+  and "generated state":
+  - `config.yaml` (`CONFIG_PATH`, default `/config/config.yaml`) - app
+    settings (`mqtt`, `web`, `cleanup`, `source_defaults`, `snippet_dir`,
+    `ffmpeg_path`, `log_level`). Fully optional - every field can also come
+    from an env var, so a pure-env-var deployment doesn't need this file
+    mounted at all. The app never rewrites it just because it booted -
+    only when the settings UI explicitly changes something (e.g. saving
+    MQTT settings), and even then it only ever writes values that differ
+    from their default *and* aren't currently sourced from an env var (env
+    always wins regardless of what's on disk, so writing it back would
+    just leak it into a plaintext file - this matters most for
+    `mqtt.password`). If a field is set both in the file and via env var,
+    the app logs a warning at startup naming both.
+  - `sources/*.yaml` (`SOURCES_DIR`, default `/config/sources`) - one file
+    per source, created/updated/deleted by the settings UI. This one does
+    need somewhere to live, since sources aren't env-var configurable
+    (there's no clean way to express a dynamic list of them that way).
+  - `auth_token` (`AUTH_TOKEN_PATH`, default `/config/auth_token`) - the
+    websocket's auth secret. Generated once on first boot and written to
+    its own file (not config.yaml, since it isn't a "setting" with a
+    default to compare against); every later boot just reads it back.
+    Losing this file just means a new token gets generated - any browser
+    tab open at the time needs a manual reload to pick it up (its
+    websocket keeps retrying with the now-stale token otherwise).
+
+### Optional Environment overrides
+If the ENV is set, it will override and replace the value in the config.yaml
+*MQTT*
+| Var | Default | |
+|---|---|---|
+| `MQTT_ENABLED` | `false` | enable/disable MQTT client |
+| `MQTT_HOST` | `localhost` | MQTT broker host |
+| `MQTT_PORT` | `1883` | MQTT broker port |
+| `MQTT_USERNAME` | `None` | MQTT client username |
+| `MQTT_PASSWORD` | `None` | MQTT client password |
+| `MQTT_TOPIC` | `bark_detector` | MQTT message base topic |
+| `MQTT_CLIENT_ID` | `bark_detector` | MQTT client ID |
+*WEB UI*
+| Var | Default | |
+|---|---|---|
+| `WEB_ENABLED` | `true` | enable/disable Web UI |
+| `WEB_HOST` | `0.0.0.0` | Web UI host |
+| `WEB_PORT` | `8099` | Web UI port |
+*CLEANUP*
+| Var | Default | |
+|---|---|---|
+| `CLEANUP_MAX_AGE_DAYS` | `30` | delete snippet after X days |
+| `CLEANUP_MAX_SPACE_MB` | `100` | trim snippets to remain below X MB  |
+| `CLEANUP_CHECK_INTERVAL_MINUTES` | `15` | run trimming every X minutes |
+*OTHERS*
+| Var | Default | |
+|---|---|---|
+| `CONFIG_PATH` | `/config/config.yaml` | app config file (see above) |
+| `SOURCES_DIR` | `/config/sources` | directory holding one *.yaml file per source |
+| `AUTH_TOKEN_PATH` | `/config/auth_token` | websocket auth secret, generated on first boot |
+| `SNIPPET_DIR` | `/media/bark_snippets` | folder to save snippets |
+| `LOG_LEVEL` | `INFO` | log level (INFO/WARN/ERROR), parsed at startup|
+
+
 
 ### MQTT topics
 
@@ -133,10 +201,11 @@ Want to fetch a bigger/different set without going through Docker? From
 bark_detector/           the application (Python package)
   templates/               event log + settings pages (plain HTML/JS, no build step)
   static/                  shared stylesheet + websocket client used by both pages
-config.example.yaml      annotated config reference - optional, copy to ./config/config.yaml
+examples/                ready-to-run docker-compose examples (see Quick start)
+  basic/                   sources via the settings UI, minimal env config
+  extended/                everything env-driven, sources as YAML files, web UI off
 requirements.txt
 Dockerfile
-docker-compose.yml       run against real hardware
 test-rig/                local end-to-end test rig (mosquitto + mediamtx + publisher)
   dataset/                 fetched test clips - gitignored, not committed
   stream/                  the test publisher

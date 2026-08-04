@@ -219,23 +219,24 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# bark-detector: real config holds MQTT/camera credentials, never commit it
-# (config.example.yaml and test-rig/config.yaml are fine - no real secrets).
-# /config/ is docker-compose.yml's bind-mounted directory (holds
-# config.yaml plus atomic-write temp files); /config.yaml covers running
-# the app directly against a root-level file instead
+# bark-detector
+
+# Config
 /config/
 /config.yaml
+/auth_token
 
-# bark-detector: runtime output (saved WAV snippets + the event log db),
-# not source
+# runtime output (saved WAV snippets + the event log db,
+# plus the generated auth token if an example bind-mounts one place), not
+# source
 /snippets/
 /test-rig/snippets/
+/examples/*/snippets/
+/examples/*/config/auth_token
 
-# bark-detector: AudioSet test set fetched on demand by
-# test-rig/download_audioset.py (directly, or automatically by the
-# stream-publisher container into its bind-mounted ./dataset) - samples,
-# generated playlist, and the cached AudioSet segment-index CSVs
+# AudioSet test set fetched on demand by
+# test-rig/download_audioset.py - samples, generated playlist, 
+# and the cached AudioSet segment-index CSVs
 /test-rig/dataset/
 /test-rig/.audioset_cache/
 

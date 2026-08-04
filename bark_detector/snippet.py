@@ -71,7 +71,6 @@ class SnippetRecorder:
                 "[%s] triggered by '%s' (score=%.2f)", self.source_name, label, score
             )
         else:
-            # still within a capture window: extend it and keep the best score
             self.active.chunks_remaining = self.post_chunks_needed
             self.active.score = max(self.active.score, score)
 
@@ -96,8 +95,6 @@ class SnippetRecorder:
 
     def _finalize(self) -> DetectionEvent:
         capture = self.active
-        # only called from add_chunk() right after it's confirmed self.active
-        # is set - the assert just narrows the type for the checker
         assert capture is not None
         all_chunks = capture.pre_chunks + capture.post_chunks
         duration = len(all_chunks) * AUDIO_DURATION
