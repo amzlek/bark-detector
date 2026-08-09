@@ -71,7 +71,14 @@ class SourceWorker(threading.Thread):
                     continue
                 if score < self.source.threshold_for(label):
                     continue
-                self.recorder.trigger(label, score)
+                trigger = self.recorder.trigger(label, score)
+                if trigger is not None:
+                    try:
+                        self.publisher.publish_trigger(trigger)
+                    except Exception:
+                        logger.exception(
+                            "[%s] failed to publish MQTT trigger", self.source.name
+                        )
                 break  # one trigger per chunk is enough
 
         event = self.recorder.add_chunk(chunk)
@@ -82,6 +89,6 @@ class SourceWorker(threading.Thread):
                 logger.exception("[%s] failed to store event", self.source.name)
 
             try:
-                self.publisher.publish(event)
+                self.publisher.publish_event(event)
             except Exception:
                 logger.exception("[%s] failed to publish MQTT event", self.source.name)
