@@ -20,7 +20,7 @@ DEFAULT_THRESHOLD = 0.8
 DEFAULT_MIN_VOLUME = 500
 DEFAULT_PRE_CAPTURE = 5.0
 DEFAULT_POST_CAPTURE = 5.0
-VALID_SOURCE_TYPES = ("rtsp", "device", "wyoming")
+VALID_SOURCE_TYPES = ("rtsp", "device", "esphome_tcp")
 
 # sentinel: "leave this key out of the persisted file" - see _persisted_value
 _OMIT = object()
@@ -241,12 +241,6 @@ def build_source_config(raw: dict, defaults: dict | None = None) -> SourceConfig
         raise ConfigError(
             f"source '{name}' has invalid type '{source_type}', "
             f"must be one of {VALID_SOURCE_TYPES}"
-        )
-
-    if source_type == "wyoming":
-        raise ConfigError(
-            f"source '{name}': the 'wyoming' source type "
-            "(e.g. for an M5 Atom Echo) is not implemented yet"
         )
 
     return SourceConfig(

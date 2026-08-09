@@ -29,10 +29,11 @@
   <select id="src-type">
     <option value="rtsp">rtsp (camera audio track)</option>
     <option value="device">device (USB/ALSA mic)</option>
+    <option value="esphome_tcp">esphome_tcp (M5 Atom Echo / ESPHome raw-PCM TCP)</option>
   </select>
 
   <label for="src-path">Path</label>
-  <input id="src-path" required placeholder="rtsp://user:pass@host/stream1  or  hw:1,0">
+  <input id="src-path" required placeholder="rtsp://user:pass@host/stream1  or  hw:1,0  or  tcp://host:12345">
 
   <label for="src-listen">Listen for (comma-separated)</label>
   <input id="src-listen" value="bark, bow-wow, howl, yip">

@@ -1,0 +1,17 @@
+name: kitchen
+type: esphome_tcp
+path: tcp://atom:12345
+listen:
+- bark
+- bow-wow
+- howl
+- yip
+thresholds:
+  bark: 0.8
+  bow-wow: 0.8
+  howl: 0.8
+  yip: 0.8
+min_volume: 500.0
+pre_capture: 5.0
+post_capture: 5.0
+input_args: []
