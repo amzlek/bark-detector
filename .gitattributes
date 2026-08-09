@@ -1,0 +1,11 @@
+# Every image in this project (bark-detector itself, and the test-rig
+# publishers) builds/runs on Linux, but development happens on Windows too -
+# a shell script checked out with CRLF line endings breaks its shebang
+# (`#!/bin/sh\r` -> "no such file or directory") the moment it's baked into
+# a container. Force LF regardless of platform/core.autocrlf so that can't
+# happen again.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.py text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
