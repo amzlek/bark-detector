@@ -2,8 +2,9 @@
 
 Every source yields fixed-size mono 16-bit PCM chunks at AUDIO_SAMPLE_RATE,
 so the detection loop in worker.py doesn't need to know where the audio
-comes from (an RTSP camera's audio track, a USB/ALSA mic, or eventually a
-Wyoming-protocol satellite like an M5 Atom Echo).
+comes from (an RTSP camera's audio track, a USB/ALSA mic, or an ESPHome
+device like an M5 Atom Echo streaming raw PCM over a bespoke TCP protocol -
+see esphome/tcp_audio_server.h).
 """
 
 from __future__ import annotations
@@ -33,6 +34,14 @@ def build_ffmpeg_command(
         cmd += ["-f", input_format]
     elif source_type == "rtsp":
         cmd += ["-rtsp_transport", "tcp"]
+    elif source_type == "esphome_tcp":
+        # raw PCM has no container of its own - tell ffmpeg how to parse the
+        # byte stream it reads from the socket. Matches tcp_audio_server.h /
+        # atom.yaml's microphone config exactly, so no resampling is needed.
+        # `path` is a plain tcp://host:port URL; ffmpeg's tcp protocol
+        # connects out as a client by default (no "?listen"), matching the
+        # device acting as the TCP server.
+        cmd += ["-f", "s16le", "-ar", str(AUDIO_SAMPLE_RATE), "-ac", "1"]
 
     cmd += list(input_args)
     cmd += ["-i", path]
@@ -66,9 +75,16 @@ class AudioSource:
 
 
 class FfmpegAudioSource(AudioSource):
-    """Extracts audio via ffmpeg, from either an RTSP/HTTP URL (a camera's
-    audio track) or a local capture device (e.g. an ALSA device for a USB
-    mic). Restarts ffmpeg automatically if it exits or stalls."""
+    """Extracts audio via ffmpeg, from an RTSP/HTTP URL (a camera's audio
+    track), a local capture device (e.g. an ALSA device for a USB mic), or a
+    raw-PCM TCP stream (an ESPHome device like an M5 Atom Echo). Restarts
+    ffmpeg automatically if it exits or stalls - which also covers an
+    esphome_tcp source getting disconnected/replaced by another client, or
+    the device rebooting: ffmpeg exits, and this restarts it after
+    retry_interval. A quiet stream (e.g. the device's "Recording" toggle
+    paused capture without closing the connection) is not an error - ffmpeg
+    just blocks waiting for more bytes, same as any other stalled-but-alive
+    source."""
 
     def __init__(
         self,
@@ -171,7 +187,7 @@ def _is_windows() -> bool:
 def build_source(
     source: SourceConfig, ffmpeg_path: str, stop_event: threading.Event
 ) -> AudioSource:
-    if source.type in ("rtsp", "device"):
+    if source.type in ("rtsp", "device", "esphome_tcp"):
         return FfmpegAudioSource(source, ffmpeg_path, stop_event)
 
     raise ValueError(f"unsupported source type: {source.type}")

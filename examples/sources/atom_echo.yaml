@@ -1,0 +1,19 @@
+# Per-source file template - one *.yaml per source under sources_dir.
+# Required: name, type, path. Everything else is optional, shown here at
+# its default, commented out.
+
+name: kitchen_atom
+type: esphome_tcp
+# M5 Atom Echo (or similar) running the bespoke raw-PCM TCP server in
+# esphome/tcp_audio_server.h - the device is the TCP server, bark-detector
+# connects out to it as a client. Port matches `stream_port` in atom.yaml
+# (default 12345). Already 16kHz mono S16LE, so no resampling is needed.
+path: tcp://192.168.1.121:12345
+
+# listen: [bark, bow-wow, howl, yip]
+# thresholds:
+#   bark: 0.8
+# min_volume: 500
+# pre_capture: 5
+# post_capture: 5
+# input_args: []

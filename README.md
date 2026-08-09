@@ -13,9 +13,9 @@ dependency on Frigate's video/recording/app framework.
 
 ## Features
 
-- **Pluggable audio sources**: an RTSP camera's audio track, or a USB/ALSA
-  microphone (untested). (A Wyoming-protocol source, e.g. for an M5 Atom Echo, is
-  planned but not implemented yet.)
+- **Pluggable audio sources**: an RTSP camera's audio track, a USB/ALSA
+  microphone (untested), or an ESPHome device like an M5 Atom Echo streaming
+  raw PCM over a bespoke TCP protocol (see `esphome/`).
 - **Configurable detection** per source: which labels to listen for,
   per-label thresholds, minimum volume gate, and pre/post-capture window for
   the saved snippet.
@@ -159,8 +159,12 @@ Topics are all derived from a single configurable prefix, `mqtt.topic`
 
 `test-rig/` spins up a full, real (not mocked) pipeline: a Mosquitto
 broker, a mediamtx RTSP server, a small publisher that loops a labeled
-bark/not-bark dataset into it as a live audio stream, and `bark-detector`
-pulling that stream exactly like it would a real camera.
+bark/not-bark dataset into it as a live audio stream, a second publisher
+that loops the same dataset as raw PCM over a listening TCP socket
+(emulating an M5 Atom Echo running `esphome/tcp_audio_server.h`), and
+`bark-detector` pulling both - one via `type: rtsp` (`sources/backyard.yaml`)
+exactly like a real camera, the other via `type: esphome_tcp`
+(`sources/kitchen.yaml`) exactly like real Atom Echo hardware.
 
 ```bash
 docker compose -f test-rig/docker-compose.yml up --build
@@ -169,9 +173,10 @@ docker compose -f test-rig/docker-compose.yml up --build
 No manual setup step needed - on first run, `stream-publisher` fetches a
 small labeled test set from Google AudioSet (via `stream/download_audioset.py`,
 see below) into the bind-mounted `test-rig/dataset/`, and reuses it on
-every run after that. `bark-detector` waits for the stream to actually be
-live before it starts (a Docker healthcheck on `stream-publisher`), so
-there's no window of failed-connection retries at startup.
+every run after that; the `atom` service reuses that same fetched dataset
+rather than fetching its own copy. `bark-detector` waits for both streams to
+actually be live before it starts (a Docker healthcheck on each publisher),
+so there's no window of failed-connection retries at startup.
 
 - Ground truth is in the filenames: `NN_bark.wav` / `NN_negative.wav`
 - Watch detections live: `mosquitto_sub -h localhost -t 'bark_detector/#' -v`
@@ -212,17 +217,17 @@ examples/                ready-to-run docker-compose examples (see Quick start)
   extended/                everything env-driven, sources as YAML files, web UI off
 requirements.txt
 Dockerfile
-test-rig/                local end-to-end test rig (mosquitto + mediamtx + publisher)
+test-rig/                local end-to-end test rig (mosquitto + mediamtx + publishers)
   dataset/                 fetched test clips - gitignored, not committed
-  stream/                  the test publisher
+  stream/                  the RTSP test publisher
     download_audioset.py     fetches the labeled test set from AudioSet (see above)
     entrypoint.sh             fetch-if-missing -> build playlist -> publish
+  atom/                    the esphome_tcp test publisher (emulates an M5 Atom Echo),
+                            reuses stream/'s already-built playlist
 ```
 
 ## Status / not yet done
 
-- Wyoming-protocol source (M5 Atom Echo and similar satellites) - stubbed,
-  raises a clear error if configured, not implemented.
 - `linux/arm64` image - removed for now; this release only builds/publishes
   `linux/amd64`. Revisit once there's real ARM hardware to verify against.
 - No CI yet - planned: a GitHub Actions workflow that at minimum imports
