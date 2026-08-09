@@ -33,7 +33,10 @@
   </select>
 
   <label for="src-path">Path</label>
-  <input id="src-path" required placeholder="rtsp://user:pass@host/stream1  or  hw:1,0  or  tcp://host:12345">
+  <div>
+    <input id="src-path" required>
+    <p id="src-path-hint" class="field-hint"></p>
+  </div>
 
   <label for="src-listen">Listen for (comma-separated)</label>
   <input id="src-listen" value="bark, bow-wow, howl, yip">
@@ -104,6 +107,18 @@ const sourceStatus = document.getElementById('source-status');
 const cancelBtn = document.getElementById('src-cancel');
 const submitBtn = document.getElementById('src-submit');
 
+const PATH_HINTS = {
+  rtsp: 'A camera’s audio track, e.g. rtsp://user:pass@192.168.1.50:554/stream1',
+  device: 'A local capture device, e.g. hw:1,0 - find it with `arecord -l` (Linux)',
+  esphome_tcp: 'An M5 Atom Echo (or similar) running esphome/tcp_audio_server.h, e.g. tcp://192.168.1.121:12345',
+};
+
+function updatePathHint() {
+  const type = document.getElementById('src-type').value;
+  document.getElementById('src-path-hint').textContent = PATH_HINTS[type] || '';
+}
+document.getElementById('src-type').addEventListener('change', updatePathHint);
+
 function showStatus(el, message, ok) {
   el.textContent = message;
   el.className = 'status ' + (ok ? 'ok' : 'err');
@@ -120,6 +135,7 @@ function resetSourceForm() {
   document.getElementById('src-post').value = '5';
   submitBtn.textContent = 'Add source';
   cancelBtn.hidden = true;
+  updatePathHint();
 }
 
 function fillSourceForm(source) {
@@ -135,6 +151,7 @@ function fillSourceForm(source) {
   document.getElementById('src-post').value = source.post_capture;
   submitBtn.textContent = 'Save changes';
   cancelBtn.hidden = false;
+  updatePathHint();
   window.scrollTo({ top: sourceForm.offsetTop - 20, behavior: 'smooth' });
 }
 
@@ -295,6 +312,7 @@ async function loadStats() {
   document.getElementById('stat-available').textContent = formatBytes(stats.space_available_bytes);
 }
 
+updatePathHint();
 BarkWs.connect();
 loadSources();
 loadMqtt();
