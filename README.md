@@ -151,9 +151,27 @@ Topics are all derived from a single configurable prefix, `mqtt.topic`
 
 | Topic (with the default prefix)       | When                                  | Retained |
 |----------------------------------------|----------------------------------------|:--------:|
-| `bark_detector/{source}/event`         | a detection fires                      | no       |
+| `bark_detector/{source}/triggered`     | a bark is detected, before the snippet finishes recording | no |
+| `bark_detector/{source}/event`         | the snippet finishes recording         | no       |
 | `bark_detector/{source}/status`        | a source connects/disconnects          | yes      |
 | `bark_detector/system/{event}`         | e.g. `space_limit_reached` on cleanup  | no       |
+
+A detection produces **two** messages, seconds apart, sharing the same
+`id` so a subscriber can correlate them - `triggered` fires immediately
+(for automations that need to react fast, before any audio has been
+recorded), `event` follows once the snippet is actually saved to disk:
+
+```jsonc
+// bark_detector/backyard/triggered - fired immediately
+{"id": "3f9a...c2", "source": "backyard", "label": "bark", "score": 0.85, "timestamp": 1734000000.12}
+
+// bark_detector/backyard/event - fired ~post_capture seconds later
+{"id": "3f9a...c2", "source": "backyard", "label": "bark", "score": 0.91, "timestamp": 1734000000.12, "file": "/media/bark_snippets/backyard_bark_1734000000.wav", "duration": 10.0}
+```
+
+Note `score` can differ between the two: `triggered` reports the score at
+the moment of detection, while `event`'s score is the max seen across the
+whole capture (the bark may have gotten louder/clearer as it continued).
 
 ## Local test rig
 

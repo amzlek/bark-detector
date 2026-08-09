@@ -12,7 +12,7 @@ import paho.mqtt.client as mqtt
 from paho.mqtt.enums import CallbackAPIVersion
 
 from .config import MqttConfig
-from .snippet import DetectionEvent
+from .snippet import DetectionEvent, DetectionTrigger
 
 logger = logging.getLogger(__name__)
 
@@ -99,15 +99,40 @@ class MqttPublisher:
             self.client.connect_async(self.config.host, self.config.port)
             self.client.loop_start()
 
-    def publish(self, event: DetectionEvent) -> None:
+    def publish_trigger(self, trigger: DetectionTrigger) -> None:
+        """Fired the instant a bark crosses threshold, before the snippet
+        has finished recording - so an automation can react immediately
+        instead of waiting out post_capture. publish_event() follows once
+        the snippet is saved, carrying the same "id" for correlation."""
         with self._lock:
             if not self.config.enabled:
                 return
             client = self.client
-            topic = self.config.event_topic.format(source=event.source, label=event.label)
+            topic = self.config.triggered_topic.format(source=trigger.source)
 
         payload = json.dumps(
             {
+                "id": trigger.id,
+                "source": trigger.source,
+                "label": trigger.label,
+                "score": round(trigger.score, 3),
+                "timestamp": trigger.timestamp,
+            }
+        )
+        result = client.publish(topic, payload, qos=1)
+        result.wait_for_publish(timeout=5)
+        logger.info("published trigger to %s: %s", topic, payload)
+
+    def publish_event(self, event: DetectionEvent) -> None:
+        with self._lock:
+            if not self.config.enabled:
+                return
+            client = self.client
+            topic = self.config.event_topic.format(source=event.source)
+
+        payload = json.dumps(
+            {
+                "id": event.id,
                 "source": event.source,
                 "label": event.label,
                 "score": round(event.score, 3),

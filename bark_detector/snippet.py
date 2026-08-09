@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import time
+import uuid
 import wave
 from collections import deque
 from dataclasses import dataclass, field
@@ -18,7 +19,21 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class DetectionTrigger:
+    """Published immediately when a capture starts - before any audio has
+    finished recording. `id` correlates it with the DetectionEvent that
+    follows once the snippet is saved."""
+
+    id: str
+    source: str
+    label: str
+    score: float
+    timestamp: float
+
+
+@dataclass
 class DetectionEvent:
+    id: str
     source: str
     label: str
     score: float
@@ -29,6 +44,7 @@ class DetectionEvent:
 
 @dataclass
 class _ActiveCapture:
+    id: str
     label: str
     score: float
     timestamp: float
@@ -56,11 +72,19 @@ class SnippetRecorder:
     def is_capturing(self) -> bool:
         return self.active is not None
 
-    def trigger(self, label: str, score: float) -> None:
-        """Start (or extend, if already capturing) a snippet capture."""
+    def trigger(self, label: str, score: float) -> Optional[DetectionTrigger]:
+        """Start (or extend, if already capturing) a snippet capture.
+        Returns a DetectionTrigger only when a NEW capture starts - the id/
+        label/timestamp minted here are carried through unchanged to the
+        DetectionEvent add_chunk() eventually returns, so a subscriber can
+        correlate the two. Extending an already-active capture (the bark
+        continues) returns None: one 'triggered' message per capture, not
+        one per chunk."""
         now = time.time()
         if self.active is None:
+            trigger_id = uuid.uuid4().hex
             self.active = _ActiveCapture(
+                id=trigger_id,
                 label=label,
                 score=score,
                 timestamp=now,
@@ -70,9 +94,17 @@ class SnippetRecorder:
             logger.info(
                 "[%s] triggered by '%s' (score=%.2f)", self.source_name, label, score
             )
+            return DetectionTrigger(
+                id=trigger_id,
+                source=self.source_name,
+                label=label,
+                score=score,
+                timestamp=now,
+            )
         else:
             self.active.chunks_remaining = self.post_chunks_needed
             self.active.score = max(self.active.score, score)
+            return None
 
     def add_chunk(self, chunk: bytes) -> Optional[DetectionEvent]:
         """Feed the next PCM chunk in. Always keeps the pre-roll buffer warm;
@@ -116,6 +148,7 @@ class SnippetRecorder:
         )
 
         return DetectionEvent(
+            id=capture.id,
             source=self.source_name,
             label=capture.label,
             score=capture.score,

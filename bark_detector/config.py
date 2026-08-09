@@ -104,6 +104,14 @@ class MqttConfig:
     client_id: str = "bark_detector"
 
     @property
+    def triggered_topic(self) -> str:
+        """{source} placeholder; published the instant a bark crosses
+        threshold, before the snippet has finished recording - see
+        event_topic, which follows once the snippet is saved and carries
+        the same "id" for correlation."""
+        return f"{self.topic}/{{source}}/triggered"
+
+    @property
     def event_topic(self) -> str:
         """{source} placeholder."""
         return f"{self.topic}/{{source}}/event"
