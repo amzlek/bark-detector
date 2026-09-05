@@ -162,6 +162,28 @@ class AppController:
 
     def _on_mqtt_status_change(self, connected: bool) -> None:
         self.ws_hub.broadcast({"type": "mqtt_status", "connected": connected})
+        # (re)publish HA discovery configs on every successful connect - the
+        # only way a fresh HA instance or broker (no retained messages yet)
+        # ends up with the full set of entities without a restart, and
+        # cheap enough (retained, no-op if unchanged) to do unconditionally.
+        # Off-thread: this callback runs ON paho's own network thread (it's
+        # wired to on_connect), and each discovery publish blocks on
+        # wait_for_publish() waiting for a PUBACK that thread would
+        # otherwise deliver itself - calling it inline would self-block for
+        # the full timeout on every topic, stalling all other MQTT traffic
+        # (triggers/events/status) for as long as discovery publishing takes.
+        if connected:
+            with self._lock:
+                sources = list(self.config.sources)
+            threading.Thread(
+                target=self._publish_discovery, args=(sources,), name="ha-discovery", daemon=True
+            ).start()
+
+    def _publish_discovery(self, sources: list[SourceConfig]) -> None:
+        try:
+            self.publisher.publish_all_discovery(sources)
+        except Exception:
+            logger.exception("failed to publish HA discovery configs")
 
     # -- cleanup ----------------------------------------------------------------
 
@@ -194,7 +216,12 @@ class AppController:
             self.config.sources.append(source)
             save_source(source, self.sources_dir)
             self._start_worker(source)
-            return source
+
+        try:
+            self.publisher.publish_discovery_for_source(source)
+        except Exception:
+            logger.exception("failed to publish HA discovery config for '%s'", source.name)
+        return source
 
     def update_source(self, name: str, raw: dict) -> SourceConfig:
         with self._lock:
@@ -204,7 +231,7 @@ class AppController:
             if index is None:
                 raise ConfigError(f"source '{name}' not found")
 
-            merged = {**raw, "name": raw.get("name", name)}
+            merged = {**raw, "name": raw.get("name", name), "id": self.config.sources[index].id}
             new_source = build_source_config(merged)
 
             if new_source.name != name and any(
@@ -222,16 +249,29 @@ class AppController:
         self._stop_worker(name)
         with self._lock:
             self._start_worker(new_source)
+
+        try:
+            # same unique_id (see update_source's "id" preservation above),
+            # so this overwrites the entity's existing HA config in place
+            # (e.g. a new name/listen list) rather than creating a duplicate
+            self.publisher.publish_discovery_for_source(new_source)
+        except Exception:
+            logger.exception("failed to publish HA discovery config for '%s'", new_source.name)
         return new_source
 
     def delete_source(self, name: str) -> None:
         with self._lock:
-            remaining = [s for s in self.config.sources if s.name != name]
-            if len(remaining) == len(self.config.sources):
+            removed = next((s for s in self.config.sources if s.name == name), None)
+            if removed is None:
                 raise ConfigError(f"source '{name}' not found")
-            self.config.sources = remaining
+            self.config.sources = [s for s in self.config.sources if s.name != name]
             delete_source_file(name, self.sources_dir)
         self._stop_worker(name)
+
+        try:
+            self.publisher.remove_discovery_for_source(removed.id)
+        except Exception:
+            logger.exception("failed to remove HA discovery config for '%s'", name)
 
     def test_source(self, raw: dict) -> tuple[bool, str]:
         """Probe a candidate source's connectivity without saving/starting it -
@@ -258,10 +298,24 @@ class AppController:
         (see settings.html/web.py, which never send the real password back
         to the browser to begin with) without that clearing it out."""
         with self._lock:
-            merged = {**dataclasses.asdict(self.config.mqtt), **raw}
+            old_mqtt = self.config.mqtt
+            merged = {**dataclasses.asdict(old_mqtt), **raw}
             new_mqtt = build_mqtt_config(merged)
             self.config.mqtt = new_mqtt
             self._persist()
+            sources = list(self.config.sources)
 
         self.publisher.reconfigure(new_mqtt)
+
+        # discovery just got turned off: clean up entities left over from
+        # when it was on, on the (possibly new) broker - reconfigure()
+        # already handles the opposite direction (turning it back on),
+        # since _on_mqtt_status_change republishes everything on connect
+        if old_mqtt.discovery and not new_mqtt.discovery:
+            try:
+                self.publisher.remove_system_discovery()
+                for source in sources:
+                    self.publisher.remove_discovery_for_source(source.id)
+            except Exception:
+                logger.exception("failed to remove HA discovery configs after disabling discovery")
         return new_mqtt
