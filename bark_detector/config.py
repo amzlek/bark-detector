@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import tempfile
+import uuid
 from dataclasses import dataclass, field
 from typing import TypeVar
 
@@ -102,6 +103,20 @@ class MqttConfig:
     # actually needed)
     topic: str = "bark_detector"
     client_id: str = "bark_detector"
+    # publish Home Assistant MQTT discovery configs (see ha_discovery.py) -
+    # on by default so turning mqtt on "just works" with HA; the raw topics
+    # below are published either way, this only adds the extra retained
+    # homeassistant/.../config messages that make entities auto-appear
+    discovery: bool = True
+    discovery_prefix: str = "homeassistant"
+
+    @property
+    def availability_topic(self) -> str:
+        """Whole-process liveness (LWT-backed - see MqttPublisher._build_client),
+        distinct from the per-source status_topic below, which tracks
+        whether audio is actually flowing on one source, not whether the
+        process/broker connection itself is alive."""
+        return f"{self.topic}/bridge/status"
 
     @property
     def triggered_topic(self) -> str:
@@ -141,6 +156,14 @@ class SourceConfig:
     pre_capture: float = DEFAULT_PRE_CAPTURE
     post_capture: float = DEFAULT_POST_CAPTURE
     input_args: list[str] = field(default_factory=list)
+    # stable identity that survives a rename (unlike `name`, which is used
+    # as-is in MQTT topics and is freely user-editable) - generated once
+    # here and carried forward by build_source_config whenever a caller
+    # passes an existing "id" through, same "chosen once, never recomputed"
+    # rule as _slugify's on-disk filename. Used as the HA discovery
+    # unique_id/device identifier, so renaming a source updates its
+    # existing HA entity instead of creating a duplicate.
+    id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
     def threshold_for(self, label: str) -> float:
         return self.thresholds.get(label, DEFAULT_THRESHOLD)
@@ -226,6 +249,14 @@ def build_mqtt_config(raw: dict) -> MqttConfig:
         client_id=_env_override(
             "MQTT_CLIENT_ID", raw.get("client_id", MqttConfig.client_id), in_file="client_id" in raw
         ),
+        discovery=_env_override(
+            "MQTT_DISCOVERY", bool(raw.get("discovery", MqttConfig.discovery)), in_file="discovery" in raw
+        ),
+        discovery_prefix=_env_override(
+            "MQTT_DISCOVERY_PREFIX",
+            raw.get("discovery_prefix", MqttConfig.discovery_prefix),
+            in_file="discovery_prefix" in raw,
+        ),
     )
 
 
@@ -251,6 +282,11 @@ def build_source_config(raw: dict, defaults: dict | None = None) -> SourceConfig
             f"must be one of {VALID_SOURCE_TYPES}"
         )
 
+    # only pass "id" through when the caller has one to preserve (an
+    # existing source being reloaded/renamed) - omitting it lets
+    # SourceConfig's default_factory mint a fresh one for a brand new source
+    id_kwargs: dict[str, str] = {"id": raw["id"]} if raw.get("id") else {}
+
     return SourceConfig(
         name=name,
         type=source_type,
@@ -267,6 +303,7 @@ def build_source_config(raw: dict, defaults: dict | None = None) -> SourceConfig
             raw.get("post_capture", defaults.get("post_capture", DEFAULT_POST_CAPTURE))
         ),
         input_args=raw.get("input_args", []),
+        **id_kwargs,
     )
 
 
@@ -334,6 +371,22 @@ def load_sources(sources_dir: str, defaults: dict | None = None) -> list[SourceC
             raise ConfigError(f"duplicate source name '{source.name}' (in {filename})")
         seen_names.add(source.name)
         sources.append(source)
+        # one-time migration: a source file saved before `id` existed - mint
+        # one now and persist it immediately so it doesn't change again on
+        # the next load (which would silently orphan its HA discovery entity).
+        # Best-effort: sources_dir may be read-only (e.g. a mounted fixture
+        # in a test rig) - losing the migration write there just means the
+        # id won't survive a restart, which shouldn't take the whole app
+        # down when everything else about loading this source succeeded.
+        if "id" not in raw:
+            try:
+                save_source(source, sources_dir)
+            except OSError:
+                logger.warning(
+                    "couldn't persist a newly generated id for source '%s' (%s is read-only?)",
+                    source.name,
+                    sources_dir,
+                )
     return sources
 
 
@@ -512,6 +565,12 @@ def dump_config(config: Config) -> dict:
                 "client_id": _persisted_value(
                     config.mqtt.client_id, default_mqtt.client_id, "MQTT_CLIENT_ID"
                 ),
+                "discovery": _persisted_value(
+                    config.mqtt.discovery, default_mqtt.discovery, "MQTT_DISCOVERY"
+                ),
+                "discovery_prefix": _persisted_value(
+                    config.mqtt.discovery_prefix, default_mqtt.discovery_prefix, "MQTT_DISCOVERY_PREFIX"
+                ),
             }
         ),
         "sources_dir": _persisted_value(config.sources_dir, Config.sources_dir, "SOURCES_DIR"),
@@ -551,6 +610,7 @@ def dump_config(config: Config) -> dict:
 def _dump_source(source: SourceConfig) -> dict:
     """Serialize one source back to the shape load_sources() reads."""
     return {
+        "id": source.id,
         "name": source.name,
         "type": source.type,
         "path": source.path,

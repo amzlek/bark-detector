@@ -14,6 +14,8 @@
 #   password:
 #   topic: bark_detector
 #   client_id: bark_detector
+#   discovery: true
+#   discovery_prefix: homeassistant
 
 # snippet_dir: /media/bark_snippets
 # log_level: INFO
