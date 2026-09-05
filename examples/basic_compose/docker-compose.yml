@@ -1,6 +1,6 @@
 services:
   bark-detector:
-    image: ghcr.io/amzlek/bark-detector::latest
+    image: ghcr.io/amzlek/bark-detector:latest
     restart: unless-stopped
     ports:
       - "8099:8099"
