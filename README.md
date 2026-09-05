@@ -115,6 +115,8 @@ If the ENV is set, it will override and replace the value in the config.yaml
 | `MQTT_PASSWORD` | `None` | MQTT client password |
 | `MQTT_TOPIC` | `bark_detector` | MQTT message base topic |
 | `MQTT_CLIENT_ID` | `bark_detector` | MQTT client ID |
+| `MQTT_DISCOVERY` | `true` | publish Home Assistant MQTT discovery configs (see below) |
+| `MQTT_DISCOVERY_PREFIX` | `homeassistant` | discovery topic prefix - match your HA `mqtt: discovery_prefix:` if you changed it from the default |
 
 
 #### WEB UI
@@ -173,6 +175,37 @@ Note `score` can differ between the two: `triggered` reports the score at
 the moment of detection, while `event`'s score is the max seen across the
 whole capture (the bark may have gotten louder/clearer as it continued).
 
+Whenever MQTT reconnects (including the very first connect), bark-detector
+also publishes `bark_detector/bridge/status` (retained) as `online`, backed
+by an MQTT Last Will so it flips to `offline` on its own - via a clean
+shutdown or an ungraceful crash/network loss alike - without anything else
+needing to publish it.
+
+### Home Assistant
+
+Turning on `mqtt.enabled: true` is enough - no Home Assistant-side YAML
+required. bark-detector also publishes Home Assistant [MQTT
+discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
+configs (`mqtt.discovery: true` by default), so HA auto-creates:
+
+- Per source: a **Detected** event entity (fires the instant a bark crosses
+  threshold, using the `triggered` topic for the lowest latency; `score`,
+  the saved snippet's `file` path, and `duration` show up as attributes a
+  few seconds later, once the `event` message with that same `id` arrives)
+  and a **Connectivity** binary sensor (from the `status` topic).
+- One instance-wide **Space Alert** diagnostic entity, from
+  `bark_detector/system/space_limit_reached`.
+
+All of these use `bark_detector/bridge/status` as their HA `availability_topic`,
+so they show up as `unavailable` in HA (instead of a stale last value) if
+bark-detector stops publishing for any reason. Renaming a source in the
+settings UI updates its existing HA entities in place - it doesn't create
+duplicates. Deleting a source removes its HA entities.
+
+Set `mqtt.discovery: false` (or `MQTT_DISCOVERY=false`) to keep the raw MQTT
+topics above but skip Home Assistant auto-discovery entirely - e.g. if
+you'd rather hand-write your own HA MQTT sensors.
+
 ## Local test rig
 
 `test-rig/` spins up a full, real (not mocked) pipeline: a Mosquitto
@@ -198,6 +231,7 @@ so there's no window of failed-connection retries at startup.
 
 - Ground truth is in the filenames: `NN_bark.wav` / `NN_negative.wav`
 - Watch detections live: `mosquitto_sub -h localhost -t 'bark_detector/#' -v`
+- Watch Home Assistant discovery configs: `mosquitto_sub -h localhost -t 'homeassistant/#' -v`
 - Event log / settings UI: http://localhost:8099
 - `stream-publisher` logs `[stream] now playing: NN_bark.wav` as it cycles
   through the dataset, so you can line up bark-detector's log output

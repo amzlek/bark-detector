@@ -106,7 +106,13 @@ services:
         condition: service_healthy
     volumes:
       - ./config.yaml:/config/config.yaml
-      - ./sources:/config/sources
+      # ro: these are committed fixtures, not scratch state - bark-detector
+      # rewrites a source's file on its first load if it predates a schema
+      # addition (e.g. the "id" field), which would otherwise dirty the
+      # working tree on every test run. Add/edit/delete-source and other
+      # settings-UI-driven writes will fail against a read-only mount -
+      # drop :ro locally if you need to exercise those against the rig.
+      - ./sources:/config/sources:ro
       - ./snippets:/media/bark_snippets
     ports:
       - "8099:8099"
