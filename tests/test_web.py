@@ -6,7 +6,7 @@ from unittest.mock import Mock
 
 from bark_detector.config import Config, ConfigError, MqttConfig, build_source_config
 from bark_detector.controller import AppController
-from bark_detector.web import _dispatch, create_app
+from bark_detector.web import _dispatch, _valid_ws_origin, create_app
 from test_support import ScratchTestCase
 
 
@@ -54,6 +54,17 @@ class WebTests(ScratchTestCase):
         self.assertEqual(response.data, b"RIFF-data")
         response.close()
         self.assertEqual(self.client.get("/snippets/missing.wav").status_code, 404)
+
+    def test_events_limit_is_clamped(self):
+        self.controller.store = SimpleNamespace(list_recent=Mock(return_value=[]))
+        for query, expected in (("-1", 1), ("0", 50), ("999", 200)):
+            self.client.get(f"/api/events?limit={query}")
+            self.controller.store.list_recent.assert_called_with(limit=expected, before=None)
+
+    def test_websocket_origin_is_same_host(self):
+        self.assertTrue(_valid_ws_origin("http://camera.local:8099", "camera.local:8099"))
+        self.assertFalse(_valid_ws_origin("https://attacker.example", "camera.local:8099"))
+        self.assertFalse(_valid_ws_origin("null", "camera.local:8099"))
 
     def test_websocket_dispatch_redacts_password_and_correlates_request(self):
         socket = SocketCollector()

@@ -32,6 +32,7 @@ import logging
 import os
 import queue
 import threading
+from urllib.parse import urlsplit
 
 from flask import Flask, abort, jsonify, render_template, request, send_file, send_from_directory
 from flask_sock import Sock
@@ -77,7 +78,7 @@ def create_app(controller: AppController) -> Flask:
 
     @app.get("/api/events")
     def list_events():
-        limit = min(request.args.get("limit", 50, type=int) or 50, 200)
+        limit = max(1, min(request.args.get("limit", 50, type=int) or 50, 200))
         before = request.args.get("before", type=float)
         events = controller.store.list_recent(limit=limit, before=before)
         for event in events:
@@ -119,9 +120,24 @@ def create_app(controller: AppController) -> Flask:
 
     @sock.route("/ws")
     def ws_endpoint(ws):
+        if not _valid_ws_origin(request.headers.get("Origin"), request.host):
+            ws.close(reason="invalid origin")
+            return
         _serve_ws_client(controller, ws)
 
     return app
+
+
+def _valid_ws_origin(origin: str | None, host: str) -> bool:
+    # Browsers always include Origin on a WebSocket handshake. Non-browser
+    # LAN clients may omit it; cross-site browser scripts cannot.
+    if origin is None:
+        return True
+    try:
+        parsed = urlsplit(origin)
+        return parsed.scheme in ("http", "https") and parsed.netloc == host and parsed.path in ("", "/") and not parsed.query and not parsed.fragment
+    except ValueError:
+        return False
 
 
 def _serve_ws_client(controller: AppController, ws) -> None:
