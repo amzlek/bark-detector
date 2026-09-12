@@ -48,19 +48,29 @@ class SourceWorker(threading.Thread):
         self.last_chunk_at: Optional[float] = None
         self._last_near_miss_log: dict[str, float] = {}
 
+    def start(self) -> None:
+        # Surface ffmpeg spawn/configuration errors to the controller before
+        # it commits a source change. Network connection may still be async.
+        self.audio_source.start()
+        try:
+            super().start()
+        except BaseException:
+            self.audio_source.stop()
+            raise
+
     def run(self) -> None:
         logger.info("[%s] starting worker (type=%s)", self.source.name, self.source.type)
-        self.audio_source.start()
+        try:
+            while not self.stop_event.is_set():
+                chunk = self.audio_source.read_chunk()
+                if chunk is None:
+                    continue
 
-        while not self.stop_event.is_set():
-            chunk = self.audio_source.read_chunk()
-            if chunk is None:
-                continue
+                self.last_chunk_at = time.time()
+                self._process_chunk(chunk)
+        finally:
+            self.audio_source.stop()
 
-            self.last_chunk_at = time.time()
-            self._process_chunk(chunk)
-
-        self.audio_source.stop()
         logger.info("[%s] worker stopped", self.source.name)
 
     def _process_chunk(self, chunk: bytes) -> None:

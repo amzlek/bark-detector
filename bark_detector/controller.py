@@ -94,8 +94,11 @@ class AppController:
     def _start_worker(self, source: SourceConfig) -> None:
         stop_event = threading.Event()
         worker = SourceWorker(self.config, source, self.publisher, self.store, stop_event)
+        try:
+            worker.start()
+        except (OSError, RuntimeError) as exc:
+            raise ConfigError(f"could not start source '{source.name}': {exc}") from exc
         self._workers[source.name] = _ManagedWorker(worker, stop_event)
-        worker.start()
         logger.info("started worker for source '%s'", source.name)
 
     def _stop_worker(self, name: str) -> None:
@@ -213,9 +216,13 @@ class AppController:
                 raise ConfigError(f"source '{name}' already exists")
 
             source = build_source_config(raw)
-            self.config.sources.append(source)
-            save_source(source, self.sources_dir)
             self._start_worker(source)
+            try:
+                save_source(source, self.sources_dir)
+            except Exception:
+                self._stop_worker(source.name)
+                raise
+            self.config.sources.append(source)
 
         try:
             self.publisher.publish_discovery_for_source(source)
@@ -239,16 +246,25 @@ class AppController:
             ):
                 raise ConfigError(f"source '{new_source.name}' already exists")
 
-            self.config.sources[index] = new_source
-            save_source(new_source, self.sources_dir)
-            if new_source.name != name:
-                delete_source_file(name, self.sources_dir)
-
-        # restart outside the lock: join() can block briefly and shouldn't
-        # hold up unrelated reads (e.g. list_sources) while it does
-        self._stop_worker(name)
-        with self._lock:
-            self._start_worker(new_source)
+            old_source = self.config.sources[index]
+            self._stop_worker(name)
+            saved = False
+            try:
+                self._start_worker(new_source)
+                save_source(new_source, self.sources_dir)
+                saved = True
+                if new_source.name != name:
+                    delete_source_file(name, self.sources_dir)
+                self.config.sources[index] = new_source
+            except Exception:
+                self._stop_worker(new_source.name)
+                if saved:
+                    if new_source.name == name:
+                        save_source(old_source, self.sources_dir)
+                    else:
+                        delete_source_file(new_source.name, self.sources_dir)
+                self._start_worker(old_source)
+                raise
 
         try:
             # same unique_id (see update_source's "id" preservation above),

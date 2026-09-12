@@ -61,6 +61,23 @@ class ControllerTests(ScratchTestCase):
         self.assertFalse(ok)
         self.assertIn("invalid type", message)
 
+    def test_failed_add_does_not_persist_source(self):
+        self.worker_class.return_value.start.side_effect = OSError("ffmpeg missing")
+        with self.assertRaisesRegex(ConfigError, "ffmpeg missing"):
+            self.controller.add_source(self.raw)
+        self.assertEqual(self.controller.list_sources(), [])
+        self.assertEqual(load_sources(str(self.source_dir)), [])
+
+    def test_failed_update_restores_old_source(self):
+        old = self.controller.add_source(self.raw)
+        self.worker_class.return_value.start.side_effect = [OSError("spawn failed"), None]
+        with self.assertRaisesRegex(ConfigError, "spawn failed"):
+            self.controller.update_source("Kitchen", {**self.raw, "name": "Porch"})
+        self.assertEqual(self.controller.list_sources(), [old])
+        self.assertEqual(load_sources(str(self.source_dir)), [old])
+        self.assertIn("Kitchen", self.controller._workers)
+        self.assertNotIn("Porch", self.controller._workers)
+
 
 if __name__ == "__main__":
     unittest.main()
