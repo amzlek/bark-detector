@@ -29,6 +29,7 @@ RUN wget -qO - https://www.kaggle.com/api/v1/models/google/yamnet/tfLite/classif
 # musllinux wheel and no sdist either - `pip install` on Alpine finds zero
 # matching distributions, confirmed by actually trying it, not just guessed
 FROM python:3.14-slim AS base
+LABEL org.opencontainers.image.description="Lightweight audio bark detection service with MQTT notifications and WAV snippets"
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     PYTHONUNBUFFERED=1

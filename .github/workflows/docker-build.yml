@@ -82,6 +82,7 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}:v${{ steps.version.outputs.version }}
             ghcr.io/${{ github.repository }}:latest
+          annotations: index,manifest:org.opencontainers.image.description=Lightweight audio bark detection service with MQTT notifications and WAV snippets
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
