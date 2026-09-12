@@ -11,6 +11,7 @@ from bark_detector.snippet import DetectionEvent, DetectionTrigger
 class MqttTests(unittest.TestCase):
     def setUp(self):
         self.client = MagicMock()
+        self.client.publish.return_value.rc = 0
         self.client.publish.return_value.wait_for_publish.return_value = None
         self.client_factory = patch("bark_detector.mqtt_publisher.mqtt.Client", return_value=self.client)
         self.client_factory.start()
@@ -32,6 +33,17 @@ class MqttTests(unittest.TestCase):
         self.assertEqual(second.args[0], "dogs/Kitchen/event")
         self.assertEqual(json.loads(first.args[1])["id"], json.loads(second.args[1])["id"])
         self.assertEqual(json.loads(second.args[1])["duration"], 2.35)
+        self.client.publish.return_value.wait_for_publish.assert_not_called()
+
+    def test_publish_drops_newest_when_paho_queue_is_full(self):
+        from paho.mqtt.client import MQTT_ERR_QUEUE_SIZE
+
+        self.client.publish.return_value.rc = MQTT_ERR_QUEUE_SIZE
+        with self.assertLogs("bark_detector.mqtt_publisher", level="WARNING") as captured:
+            self.publisher.publish_trigger(DetectionTrigger("id", "Kitchen", "bark", 0.9, 0))
+        self.assertIn("queue full", captured.output[0])
+        self.client.publish.return_value.wait_for_publish.assert_not_called()
+        self.client.max_queued_messages_set.assert_called_once_with(1000)
 
     def test_status_and_availability_are_retained(self):
         self.client.will_set.assert_called_once_with("dogs/bridge/status", "offline", qos=1, retain=True)

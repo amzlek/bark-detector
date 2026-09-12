@@ -17,6 +17,8 @@ from .snippet import DetectionEvent, DetectionTrigger
 
 logger = logging.getLogger(__name__)
 
+MAX_QUEUED_MESSAGES = 1000
+
 
 class MqttPublisher:
     """Thread-safe: publish() is called concurrently from every SourceWorker,
@@ -38,6 +40,9 @@ class MqttPublisher:
 
     def _build_client(self, config: MqttConfig) -> mqtt.Client:
         client = mqtt.Client(CallbackAPIVersion.VERSION2, client_id=config.client_id)
+        # Paho retains QoS 1 messages awaiting PUBACK. Bound that backlog
+        # while preserving submission order; a full queue drops the newest.
+        client.max_queued_messages_set(MAX_QUEUED_MESSAGES)
         if config.username:
             client.username_pw_set(config.username, config.password)
         client.on_connect = self._handle_connect
@@ -75,6 +80,14 @@ class MqttPublisher:
     def is_connected(self) -> bool:
         with self._lock:
             return self.connected
+
+    @staticmethod
+    def _publish(client, topic: str, payload, *, retain: bool = False) -> None:
+        result = client.publish(topic, payload, qos=1, retain=retain)
+        if result.rc == mqtt.MQTT_ERR_QUEUE_SIZE:
+            logger.warning("MQTT queue full; dropped newest message for %s", topic)
+        elif result.rc != mqtt.MQTT_ERR_SUCCESS:
+            logger.warning("MQTT publish failed for %s: %s", topic, result.rc)
 
     def connect(self) -> None:
         with self._lock:
@@ -132,8 +145,7 @@ class MqttPublisher:
                 "timestamp": trigger.timestamp,
             }
         )
-        result = client.publish(topic, payload, qos=1)
-        result.wait_for_publish(timeout=5)
+        self._publish(client, topic, payload)
         logger.info("published trigger to %s: %s", topic, payload)
 
     def publish_event(self, event: DetectionEvent) -> None:
@@ -154,8 +166,7 @@ class MqttPublisher:
                 "duration": round(event.duration, 2),
             }
         )
-        result = client.publish(topic, payload, qos=1)
-        result.wait_for_publish(timeout=5)
+        self._publish(client, topic, payload)
         logger.info("published to %s: %s", topic, payload)
 
     def publish_status(self, source: str, status: str) -> None:
@@ -169,8 +180,7 @@ class MqttPublisher:
             topic = self.config.status_topic.format(source=source)
 
         payload = json.dumps({"source": source, "status": status, "timestamp": time.time()})
-        result = client.publish(topic, payload, qos=1, retain=True)
-        result.wait_for_publish(timeout=5)
+        self._publish(client, topic, payload, retain=True)
         logger.info("published status to %s: %s", topic, payload)
 
     def publish_space_alert(self, used_bytes: int, max_bytes: int, deleted_count: int) -> None:
@@ -188,8 +198,7 @@ class MqttPublisher:
                 "timestamp": time.time(),
             }
         )
-        result = client.publish(topic, payload, qos=1)
-        result.wait_for_publish(timeout=5)
+        self._publish(client, topic, payload)
         logger.info("published space alert to %s: %s", topic, payload)
 
     def publish_discovery_for_source(self, source: SourceConfig) -> None:
@@ -205,8 +214,7 @@ class MqttPublisher:
             payloads = ha_discovery.build_source_discovery(self.config, source)
 
         for topic, payload in payloads.items():
-            result = client.publish(topic, json.dumps(payload), qos=1, retain=True)
-            result.wait_for_publish(timeout=5)
+            self._publish(client, topic, json.dumps(payload), retain=True)
         logger.info("published HA discovery config for source '%s'", source.name)
 
     def remove_discovery_for_source(self, source_id: str) -> None:
@@ -222,8 +230,7 @@ class MqttPublisher:
             topics = ha_discovery.discovery_topics_for_source(self.config.discovery_prefix, source_id)
 
         for topic in topics:
-            result = client.publish(topic, "", qos=1, retain=True)
-            result.wait_for_publish(timeout=5)
+            self._publish(client, topic, "", retain=True)
         logger.info("removed HA discovery config for source id '%s'", source_id)
 
     def publish_system_discovery(self) -> None:
@@ -234,8 +241,7 @@ class MqttPublisher:
             payloads = ha_discovery.build_system_discovery(self.config)
 
         for topic, payload in payloads.items():
-            result = client.publish(topic, json.dumps(payload), qos=1, retain=True)
-            result.wait_for_publish(timeout=5)
+            self._publish(client, topic, json.dumps(payload), retain=True)
         logger.info("published HA discovery config for system entities")
 
     def remove_system_discovery(self) -> None:
@@ -247,8 +253,7 @@ class MqttPublisher:
             client = self.client
             topic = ha_discovery.system_discovery_topic(self.config.discovery_prefix)
 
-        result = client.publish(topic, "", qos=1, retain=True)
-        result.wait_for_publish(timeout=5)
+        self._publish(client, topic, "", retain=True)
         logger.info("removed HA discovery config for system entities")
 
     def publish_all_discovery(self, sources: list[SourceConfig]) -> None:
