@@ -37,7 +37,7 @@ class WebTests(ScratchTestCase):
         self.client = create_app(self.app_controller).test_client()
 
     def test_pages_assets_and_read_only_api(self):
-        for path in ("/", "/settings", "/style.css", "/ws-client.js"):
+        for path in ("/", "/settings", "/style.css", "/ws-client.js", "/healthz"):
             with self.subTest(path=path):
                 response = self.client.get(path)
                 self.assertEqual(response.status_code, 200)

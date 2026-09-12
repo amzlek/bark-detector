@@ -52,11 +52,30 @@ class StorageTests(ScratchTestCase):
             self.store.add(DetectionEvent(str(index), "Kitchen", "bark", 0.8, float(index),
                                           str(self.scratch / f"{index}.wav"), 1.0))
         self.assertEqual(self.store.count(), 3)
+        self.assertEqual(self.store.list_recent(limit=1)[0]["uuid"], "2")
         self.assertEqual([row["timestamp"] for row in self.store.list_recent(limit=2)], [2.0, 1.0])
         self.assertEqual([row["timestamp"] for row in self.store.list_recent(before=2)], [1.0, 0.0])
         oldest = self.store.list_all_ordered_by_age_asc()[0]
         self.store.delete_ids([oldest["id"]])
         self.assertEqual(self.store.count(), 2)
+
+    def test_existing_database_migrates_and_keeps_numeric_ids(self):
+        import sqlite3
+
+        path = self.scratch / "legacy.db"
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, label TEXT NOT NULL, score REAL NOT NULL, timestamp REAL NOT NULL, duration REAL NOT NULL, file TEXT NOT NULL)")
+        conn.execute("INSERT INTO events (source, label, score, timestamp, duration, file) VALUES ('Kitchen', 'bark', 0.8, 1, 1, 'old.wav')")
+        conn.commit()
+        conn.close()
+        store = EventStore(str(path))
+        self.addCleanup(store.close)
+        self.assertIsNone(store.list_recent()[0]["uuid"])
+        store.add(DetectionEvent("new-uuid", "Kitchen", "bark", 0.9, 2, "new.wav", 1))
+        self.assertEqual(store.list_recent()[0]["id"], 2)
+        self.assertEqual(store.list_recent()[0]["uuid"], "new-uuid")
+        with self.assertRaises(sqlite3.IntegrityError):
+            store.add(DetectionEvent("new-uuid", "Kitchen", "bark", 0.9, 3, "dup.wav", 1))
 
     def test_age_cleanup_removes_old_file_and_row(self):
         old_file = self.scratch / "old.wav"

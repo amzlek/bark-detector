@@ -62,6 +62,10 @@ def create_app(controller: AppController) -> Flask:
     def index():
         return render_template("index.html")
 
+    @app.get("/healthz")
+    def healthz():
+        return jsonify({"status": "ok"})
+
     @app.get("/settings")
     def settings_page():
         return render_template("settings.html")

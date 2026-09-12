@@ -35,14 +35,19 @@ class EventStore:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(events)")}
+            if "uuid" not in columns:
+                self._conn.execute("ALTER TABLE events ADD COLUMN uuid TEXT")
+            self._conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_events_uuid ON events (uuid)")
             self._conn.commit()
 
     def add(self, event: DetectionEvent) -> int:
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO events (source, label, score, timestamp, duration, file) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO events (uuid, source, label, score, timestamp, duration, file) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
+                    event.id,
                     event.source,
                     event.label,
                     event.score,
