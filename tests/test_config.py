@@ -6,6 +6,7 @@ import yaml
 
 from bark_detector.config import (
     ConfigError,
+    build_mqtt_config,
     build_source_config,
     delete_source_file,
     dump_config,
@@ -87,6 +88,31 @@ class ConfigTests(ScratchTestCase):
         (sources_dir / "b.yaml").write_text(body)
         with self.assertRaises(ConfigError):
             load_sources(str(sources_dir))
+
+    def test_rejects_invalid_source_shapes_and_capture_values(self):
+        base = {"name": "Kitchen", "type": "rtsp", "path": "rtsp://example"}
+        for changes in (
+            {"path": " "}, {"path": 12}, {"listen": "bark"},
+            {"listen": [7]}, {"input_args": "-x"}, {"input_args": [7]},
+            {"min_volume": -1}, {"pre_capture": -1}, {"post_capture": -1},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ConfigError):
+                build_source_config({**base, **changes})
+
+    def test_rejects_invalid_ports_cleanup_and_env_boolean(self):
+        config_file = self.scratch / "config.yaml"
+        for body in (
+            "mqtt:\n  port: 0\n", "web:\n  port: 65536\n",
+            "cleanup:\n  check_interval_minutes: 0\n",
+            "cleanup:\n  max_age_days: -1\n",
+            "cleanup:\n  max_space_mb: 0\n",
+        ):
+            config_file.write_text(body)
+            with self.subTest(body=body), self.assertRaises(ConfigError):
+                load_config(str(config_file), str(self.scratch / "sources"))
+        with patch.dict(os.environ, {"MQTT_ENABLED": "treu"}):
+            with self.assertRaises(ConfigError):
+                build_mqtt_config({})
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 import os
 import re
 import tempfile
@@ -48,9 +49,17 @@ def _env_override(key: str, current: _T, *, in_file: bool = False) -> _T:
     if in_file:
         logger.warning("%s is set in the config file, but env var %s overrides it", key.lower(), key)
     if isinstance(current, bool):
-        return raw.strip().lower() in ("1", "true", "yes", "on")  # type: ignore[return-value]
+        value = raw.strip().lower()
+        if value in ("1", "true", "yes", "on"):
+            return True  # type: ignore[return-value]
+        if value in ("0", "false", "no", "off"):
+            return False  # type: ignore[return-value]
+        raise ConfigError(f"{key} must be a boolean")
     if isinstance(current, int):
-        return int(raw)  # type: ignore[return-value]
+        try:
+            return int(raw)  # type: ignore[return-value]
+        except ValueError as exc:
+            raise ConfigError(f"{key} must be an integer") from exc
     if isinstance(current, float):
         return float(raw)  # type: ignore[return-value]
     return raw  # type: ignore[return-value]
@@ -215,13 +224,13 @@ class Config:
 
 
 def build_mqtt_config(raw: dict) -> MqttConfig:
-    return MqttConfig(
+    config = MqttConfig(
         enabled=_env_override(
             "MQTT_ENABLED", bool(raw.get("enabled", MqttConfig.enabled)), in_file="enabled" in raw
         ),
         host=_env_override("MQTT_HOST", raw.get("host", MqttConfig.host), in_file="host" in raw),
         port=_env_override(
-            "MQTT_PORT", int(raw.get("port", MqttConfig.port)), in_file="port" in raw
+            "MQTT_PORT", _parse_port(raw.get("port", MqttConfig.port), "MQTT port"), in_file="port" in raw
         ),
         # "or None" normalizes an empty string (e.g. a blank form field) to
         # None, matching the dataclass default - otherwise "" vs None would
@@ -245,6 +254,29 @@ def build_mqtt_config(raw: dict) -> MqttConfig:
             in_file="discovery_prefix" in raw,
         ),
     )
+    _validate_port(config.port, "MQTT port")
+    return config
+
+
+def _validate_port(port: int, label: str) -> None:
+    if not 1 <= port <= 65535:
+        raise ConfigError(f"{label} must be between 1 and 65535")
+
+
+def _nonnegative_number(value, label: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{label} must be a number") from exc
+    if not math.isfinite(number) or number < 0:
+        raise ConfigError(f"{label} must be finite and non-negative")
+    return number
+
+
+def _parse_port(value, label: str) -> int:
+    if isinstance(value, bool) or isinstance(value, float) or not str(value).isdigit():
+        raise ConfigError(f"{label} must be an integer")
+    return int(value)
 
 
 def build_source_config(raw: dict, defaults: dict | None = None) -> SourceConfig:
@@ -255,7 +287,7 @@ def build_source_config(raw: dict, defaults: dict | None = None) -> SourceConfig
             raise ConfigError(f"source is missing required field '{required}': {raw}")
 
     name = raw["name"]
-    if not name or name != name.strip():
+    if not isinstance(name, str) or not name or name != name.strip():
         raise ConfigError(f"source name {name!r} must be non-empty with no leading/trailing whitespace")
     if "/" in name:
         raise ConfigError(f"source name {name!r} can't contain '/' (it's used as an MQTT topic segment)")
@@ -268,6 +300,15 @@ def build_source_config(raw: dict, defaults: dict | None = None) -> SourceConfig
             f"source '{name}' has invalid type '{source_type}', "
             f"must be one of {VALID_SOURCE_TYPES}"
         )
+
+    if not isinstance(raw["path"], str) or not raw["path"].strip():
+        raise ConfigError(f"source '{name}' path must be a non-empty string")
+    listen = raw.get("listen", defaults.get("listen", list(DEFAULT_LISTEN)))
+    if not isinstance(listen, list) or not all(isinstance(label, str) and label for label in listen):
+        raise ConfigError(f"source '{name}' listen must be a list of non-empty strings")
+    input_args = raw.get("input_args", [])
+    if not isinstance(input_args, list) or not all(isinstance(arg, str) for arg in input_args):
+        raise ConfigError(f"source '{name}' input_args must be a list of strings")
 
     # only pass "id" through when the caller has one to preserve (an
     # existing source being reloaded/renamed) - omitting it lets
@@ -285,7 +326,6 @@ def build_source_config(raw: dict, defaults: dict | None = None) -> SourceConfig
         detection_thresholds = {label: float(value) for label, value in detection_thresholds.items()}
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"source '{name}' thresholds must be numeric") from exc
-    listen = raw.get("listen", defaults.get("listen", list(DEFAULT_LISTEN)))
     for label in listen:
         notify = notify_thresholds.get(label, DEFAULT_THRESHOLD)
         detection = detection_thresholds.get(label, notify)
@@ -301,30 +341,32 @@ def build_source_config(raw: dict, defaults: dict | None = None) -> SourceConfig
         listen=listen,
         detection_thresholds=detection_thresholds,
         notify_thresholds=notify_thresholds,
-        min_volume=float(
-            raw.get("min_volume", defaults.get("min_volume", DEFAULT_MIN_VOLUME))
+        min_volume=_nonnegative_number(
+            raw.get("min_volume", defaults.get("min_volume", DEFAULT_MIN_VOLUME)), "min_volume"
         ),
-        pre_capture=float(
-            raw.get("pre_capture", defaults.get("pre_capture", DEFAULT_PRE_CAPTURE))
+        pre_capture=_nonnegative_number(
+            raw.get("pre_capture", defaults.get("pre_capture", DEFAULT_PRE_CAPTURE)), "pre_capture"
         ),
-        post_capture=float(
-            raw.get("post_capture", defaults.get("post_capture", DEFAULT_POST_CAPTURE))
+        post_capture=_nonnegative_number(
+            raw.get("post_capture", defaults.get("post_capture", DEFAULT_POST_CAPTURE)), "post_capture"
         ),
-        input_args=raw.get("input_args", []),
+        input_args=input_args,
         **id_kwargs,
     )
 
 
 def _build_web_config(raw: dict) -> WebConfig:
-    return WebConfig(
+    config = WebConfig(
         enabled=_env_override(
             "WEB_ENABLED", bool(raw.get("enabled", WebConfig.enabled)), in_file="enabled" in raw
         ),
         host=_env_override("WEB_HOST", raw.get("host", WebConfig.host), in_file="host" in raw),
         port=_env_override(
-            "WEB_PORT", int(raw.get("port", WebConfig.port)), in_file="port" in raw
+            "WEB_PORT", _parse_port(raw.get("port", WebConfig.port), "web port"), in_file="port" in raw
         ),
     )
+    _validate_port(config.port, "web port")
+    return config
 
 
 def _build_cleanup_config(raw: dict) -> CleanupConfig:
@@ -334,7 +376,7 @@ def _build_cleanup_config(raw: dict) -> CleanupConfig:
         value = raw[key]
         return None if value is None else float(value)
 
-    return CleanupConfig(
+    config = CleanupConfig(
         max_age_days=_env_override_optional_float(
             "CLEANUP_MAX_AGE_DAYS",
             _optional_float("max_age_days", CleanupConfig.max_age_days),
@@ -351,6 +393,12 @@ def _build_cleanup_config(raw: dict) -> CleanupConfig:
             in_file="check_interval_minutes" in raw,
         ),
     )
+    if config.check_interval_minutes <= 0 or not math.isfinite(config.check_interval_minutes):
+        raise ConfigError("cleanup interval must be finite and positive")
+    for label, value in (("max_age_days", config.max_age_days), ("max_space_mb", config.max_space_mb)):
+        if value is not None and (value <= 0 or not math.isfinite(value)):
+            raise ConfigError(f"{label} must be positive or null")
+    return config
 
 
 def load_sources(sources_dir: str, defaults: dict | None = None) -> list[SourceConfig]:
