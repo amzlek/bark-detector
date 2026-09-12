@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 #
-# linux/amd64, size-optimized image:
+# linux/amd64 and linux/arm64, size-optimized image:
 #   - static ffmpeg binary (no apt codec/library tree)
 #   - python:3.14-slim base
 #   - ai-edge-litert (Google's official, actively maintained TFLite
@@ -9,14 +9,14 @@
 #   - no build toolchain in the final image (model fetched in an earlier
 #     stage and copied in)
 #
-# linux/arm64 isn't published yet - see README's "Status / not yet done".
-#
 # Build with:
 #   docker build -t bark-detector:latest .
 
 FROM mwader/static-ffmpeg:7.1.1 AS ffmpeg
 
-FROM python:3.14-slim AS model-fetch
+# The model file is architecture-independent, so fetch it on the builder's
+# native platform instead of emulating apt/wget for every target architecture.
+FROM --platform=$BUILDPLATFORM python:3.14-slim AS model-fetch
 RUN apt-get update \
     && apt-get install -y --no-install-recommends wget ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -37,7 +37,7 @@ WORKDIR /app
 
 COPY pyproject.toml README.md LICENSE /app/
 COPY bark_detector /app/bark_detector
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --no-compile .
 
 COPY --from=ffmpeg /ffmpeg /usr/local/bin/ffmpeg
 COPY --from=model-fetch /models/cpu_audio_model.tflite /app/cpu_audio_model.tflite

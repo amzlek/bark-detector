@@ -42,7 +42,7 @@ dependency on Frigate's video/recording/app framework.
 - **Minimal image**: `python:3.14-slim` + a static ffmpeg binary (no apt
   codec tree) + [ai-edge-litert](https://pypi.org/project/ai-edge-litert/)
   (Google's official TFLite runtime, prebuilt wheel).
-  `linux/amd64` only for now (see "Status / not yet done" below).
+  `linux/amd64` and `linux/arm64` images.
 
 ## Quick start
 
@@ -271,13 +271,16 @@ test-rig/                local end-to-end test rig (mosquitto + mediamtx + publi
                             reuses stream/'s already-built playlist
 ```
 
-## Status / not yet done
+## Releases
 
-- `linux/arm64` image - removed for now; this release only builds/publishes
-  `linux/amd64`. Revisit once there's real ARM hardware to verify against.
-- No CI yet - planned: a GitHub Actions workflow that at minimum imports
-  the package and builds the Docker image on every push/PR, so a broken
-  build/import is caught before release rather than at `docker compose up`.
+When `pyproject.toml` changes on `main`, whether through a direct push or a
+merged pull request, the GitHub Actions workflow reads `[project].version`.
+If `v<version>` has not been tagged yet, it builds a multi-architecture image
+for AMD64 and ARM64, publishes both
+`ghcr.io/amzlek/bark-detector:v<version>` and `:latest`, then creates and
+pushes the matching Git tag. A build failure leaves the version untagged so
+the release can be retried. Change the version in `pyproject.toml` to publish
+the next release; commits with an already tagged version skip publication.
 
 ## License
 
@@ -286,4 +289,4 @@ test-rig/                local end-to-end test rig (mosquitto + mediamtx + publi
 ## AI assistance
 
 Large parts of this project (implementation and documentation) were built
-with AI assistance (Claude Code).
+with AI assistance (Claude Code and OpenAI Codex).
