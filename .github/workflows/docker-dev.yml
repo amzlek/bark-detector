@@ -8,7 +8,7 @@ jobs:
   dev:
     runs-on: ubuntu-latest
     concurrency:
-      group: publish-dev-${{ github.repository }}
+      group: publish-${{ github.repository }}
       cancel-in-progress: false
     permissions:
       contents: read
@@ -30,13 +30,85 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Find current dev package version
+        id: previous
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          owner_type=$(gh api "users/${GITHUB_REPOSITORY_OWNER}" --jq .type)
+          package_name=${GITHUB_REPOSITORY#*/}
+          if [ "$owner_type" = Organization ]; then
+            versions_api="orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/${package_name}/versions"
+          else
+            versions_api="users/${GITHUB_REPOSITORY_OWNER}/packages/container/${package_name}/versions"
+          fi
+          echo "versions_api=$versions_api" >> "$GITHUB_OUTPUT"
+
+          # The package may not exist on the first dev build.
+          if previous_id=$(gh api --paginate "$versions_api?per_page=100" \
+              --jq '.[] | select(.metadata.container.tags | index("dev")) | .id' 2>&1); then
+            echo "version_id=$previous_id" >> "$GITHUB_OUTPUT"
+            if [ -n "$previous_id" ]; then
+              docker buildx imagetools inspect --raw \
+                "ghcr.io/${GITHUB_REPOSITORY,,}:dev" \
+                | jq -r '.manifests[]?.digest' > "$RUNNER_TEMP/previous-dev-children"
+            fi
+          elif [[ "$previous_id" == *"HTTP 404"* ]]; then
+            echo 'No previous dev package version.'
+          else
+            echo "$previous_id" >&2
+            exit 1
+          fi
+
       - name: Build and publish dev image
         uses: docker/build-push-action@v7
         with:
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
+          provenance: false
           tags: ghcr.io/${{ github.repository }}:dev
           annotations: index,manifest:org.opencontainers.image.description=Lightweight audio bark detection service with MQTT notifications and WAV snippets
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Remove previous dev package version
+        if: steps.previous.outputs.version_id != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSIONS_API: ${{ steps.previous.outputs.versions_api }}
+          PREVIOUS_ID: ${{ steps.previous.outputs.version_id }}
+        run: |
+          # Only clean up after dev has moved off the previous index.
+          tag_count=$(gh api "$VERSIONS_API/$PREVIOUS_ID" --jq '.metadata.container.tags | length')
+          if [ "$tag_count" != 0 ]; then
+            echo "Keeping previous package version $PREVIOUS_ID; it still has tags."
+            exit 0
+          fi
+
+          # A multi-arch push also creates untagged platform/attestation
+          # manifests. Keep any digest referenced by a currently tagged index,
+          # including release tags, before deleting the old dev children.
+          gh api --paginate "$VERSIONS_API?per_page=100" \
+            --jq '.[] | {id, name, tags: .metadata.container.tags}' \
+            | jq -s '.' > "$RUNNER_TEMP/package-versions.json"
+          : > "$RUNNER_TEMP/protected-children"
+          while IFS= read -r tag; do
+            docker buildx imagetools inspect --raw \
+              "ghcr.io/${GITHUB_REPOSITORY,,}:$tag" \
+              | jq -r '.manifests[]?.digest' >> "$RUNNER_TEMP/protected-children"
+          done < <(jq -r '[.[].tags[]] | unique[]' "$RUNNER_TEMP/package-versions.json")
+
+          gh api -X DELETE "$VERSIONS_API/$PREVIOUS_ID"
+          while IFS= read -r digest; do
+            if grep -Fxq "$digest" "$RUNNER_TEMP/protected-children"; then
+              continue
+            fi
+            child_id=$(jq -r --arg name "$digest" \
+              '.[] | select(.name == $name and (.tags | length) == 0) | .id' \
+              "$RUNNER_TEMP/package-versions.json")
+            if [ -n "$child_id" ]; then
+              gh api -X DELETE "$VERSIONS_API/$child_id"
+              echo "Deleted unreferenced dev child manifest $child_id."
+            fi
+          done < "$RUNNER_TEMP/previous-dev-children"
