@@ -56,8 +56,8 @@ class MqttPublisher:
             if not self.config.enabled:
                 return
             topic = self.config.availability_topic
-        result = client.publish(topic, "online", qos=1, retain=True)
-        result.wait_for_publish(timeout=5)
+        # Paho receives the PUBACK on this same network-loop thread.
+        client.publish(topic, "online", qos=1, retain=True)
 
     def _handle_disconnect(self, client, userdata, *args) -> None:
         self._set_connected(False)

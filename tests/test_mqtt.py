@@ -37,6 +37,7 @@ class MqttTests(unittest.TestCase):
         self.client.will_set.assert_called_once_with("dogs/bridge/status", "offline", qos=1, retain=True)
         self.publisher._handle_connect(self.client, None)
         self.client.publish.assert_called_with("dogs/bridge/status", "online", qos=1, retain=True)
+        self.client.publish.return_value.wait_for_publish.assert_not_called()
         self.publisher.publish_status("Kitchen", "connected")
         args, kwargs = self.client.publish.call_args
         self.assertEqual(args[0], "dogs/Kitchen/status")
