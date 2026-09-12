@@ -1,4 +1,3 @@
-import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, cast
@@ -10,6 +9,7 @@ from bark_detector.config import ConfigError, build_source_config
 from bark_detector.detector import AudioTfl
 from bark_detector.snippet import DetectionEvent, DetectionTrigger, SnippetRecorder
 from bark_detector.worker import SourceWorker
+from test_support import ScratchTestCase
 
 
 class FakeDetector(AudioTfl):
@@ -52,10 +52,9 @@ class PublisherCollector:
         self.items.append(item)
 
 
-class ThresholdTests(unittest.TestCase):
+class ThresholdTests(ScratchTestCase):
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory(dir=Path.cwd())
-        self.addCleanup(self.tmp.cleanup)
+        super().setUp()
         self.source = build_source_config({
             "name": "test", "type": "rtsp", "path": "rtsp://example/test",
             "listen": ["bark"], "min_volume": 0, "pre_capture": 0,
@@ -68,7 +67,7 @@ class ThresholdTests(unittest.TestCase):
         self.worker.source = self.source
         self.detector = FakeDetector()
         self.worker.detector = self.detector
-        self.worker.recorder = SnippetRecorder("test", self.tmp.name, 0, 1.95)
+        self.worker.recorder = SnippetRecorder("test", str(self.scratch), 0, 1.95)
         self.store = EventCollector()
         self.publisher = PublisherCollector()
         self.worker.store = self.store
@@ -83,6 +82,18 @@ class ThresholdTests(unittest.TestCase):
     def test_below_detection_saves_nothing(self):
         self.feed(0.59)
         self.assertEqual(self.store.items, [])
+        self.assertEqual(self.publisher.items, [])
+
+    def test_near_miss_is_logged_without_capture(self):
+        with self.assertLogs("bark_detector.worker", level="INFO") as logs:
+            self.feed(0.59)
+        self.assertTrue(any("below detection threshold" in message for message in logs.output))
+        self.assertFalse(self.worker.recorder.is_capturing)
+
+    def test_volume_gate_skips_classifier(self):
+        self.source.min_volume = 1
+        self.feed(0.95)
+        self.assertFalse(self.worker.recorder.is_capturing)
         self.assertEqual(self.publisher.items, [])
 
     def test_between_thresholds_saves_without_mqtt(self):

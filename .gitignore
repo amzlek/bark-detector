@@ -226,16 +226,20 @@ __marimo__/
 /config.yaml
 /auth_token
 
-# runtime output (saved WAV snippets + the event log db,
-# plus the generated auth token if an example bind-mounts one place), not
-# source
+# runtime output (saved WAV snippets and the event log db), not source
 /snippets/
 /test-rig/snippets/
 /examples/*/snippets/
-/examples/*/config/auth_token
+/tests/.tmp/
+# Windows tempfile directories from local test runs
+/tmp????????/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
 
 # AudioSet test set fetched on demand by
-# test-rig/download_audioset.py - samples, generated playlist, 
+# test-rig/stream/download_audioset.py - samples, generated playlist,
 # and the cached AudioSet segment-index CSVs
 /test-rig/dataset/
 /test-rig/.audioset_cache/

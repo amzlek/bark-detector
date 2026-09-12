@@ -198,6 +198,19 @@ Set `mqtt.discovery: false` (or `MQTT_DISCOVERY=false`) to keep the raw MQTT
 topics above but skip Home Assistant auto-discovery entirely - e.g. if
 you'd rather hand-write your own HA MQTT sensors.
 
+## Testing
+
+Install the application locally with `pip install .`, then run the automated
+suite from the repository root:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The suite covers configuration and source migration, detection thresholds,
+snippet writing, event storage and cleanup, MQTT and Home Assistant discovery,
+the web API, source management, and audio-source command construction.
+
 ## Local test rig
 
 `test-rig/` spins up a full, real (not mocked) pipeline: a Mosquitto
