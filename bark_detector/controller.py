@@ -169,12 +169,9 @@ class AppController:
         # only way a fresh HA instance or broker (no retained messages yet)
         # ends up with the full set of entities without a restart, and
         # cheap enough (retained, no-op if unchanged) to do unconditionally.
-        # Off-thread: this callback runs ON paho's own network thread (it's
-        # wired to on_connect), and each discovery publish blocks on
-        # wait_for_publish() waiting for a PUBACK that thread would
-        # otherwise deliver itself - calling it inline would self-block for
-        # the full timeout on every topic, stalling all other MQTT traffic
-        # (triggers/events/status) for as long as discovery publishing takes.
+        # Off-thread: this callback runs on Paho's network thread. Discovery
+        # preparation can touch source config and enqueue several messages,
+        # so keep that work away from the thread receiving PUBACKs.
         if connected:
             with self._lock:
                 sources = list(self.config.sources)
