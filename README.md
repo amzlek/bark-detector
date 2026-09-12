@@ -2,7 +2,7 @@
 
 A small, lightweight service that listens to one or more audio streams,
 detects a dog bark (or other configured sound), saves a WAV snippet around
-the detection, and publishes it to MQTT. No video, no recording, no
+the detection, and publishes it to MQTT. No video, no continuous recording, no
 database beyond a small local event log - built to be cheap to run in size,
 memory, and CPU.
 
@@ -37,6 +37,9 @@ dependency on Frigate's video/recording/app framework.
   - live status and all settings CRUD (add/edit/delete source, update MQTT)
     go over an unauthenticated websocket at `/ws`. The HTTP endpoints are
     unauthenticated as well, so expose the UI only on a trusted network.
+    Browser WebSocket connections require a same-host Origin; this is not
+    authentication and does not protect against clients already on that network.
+  - `/healthz` reports process liveness without depending on MQTT or sources.
 - **Automatic retention**: age- and space-based cleanup of saved snippets,
   checked on an interval.
 - **Minimal image**: `python:3.14-slim` + a static ffmpeg binary (no apt
@@ -264,6 +267,31 @@ Want to fetch a bigger/different set without going through Docker? From
 (needs `ffmpeg` on PATH).
 
 ## Project layout
+
+## Detector evaluation and scaling
+
+The local RTSP test rig checks the full capture pipeline, but its small clip
+set is not a classifier-quality benchmark. For repeatable quality checks,
+create an external CSV manifest with `path,category,is_bark` columns and run:
+
+```bash
+python -m scripts.evaluate_detector path/to/manifest.csv --model path/to/cpu_audio_model.tflite --threshold 0.8 > report.json
+```
+
+Paths in the manifest are relative to the manifest file. Use `true`/`false`
+for `is_bark`. Include bark positives and separate negative categories for
+howl, whimper, growl, generic dog sounds, speech, music, impacts/doors,
+vehicles, and other animals. Keep the clips and manifest outside normal CI.
+The report includes precision, recall, F1, false positives/negatives, score
+distributions, and results by negative category. The threshold is explicit so
+comparisons use the same decision point. Temporal voting should be evaluated
+against this dataset before selecting N/M or fast-path thresholds.
+
+Each source currently owns a TFLite interpreter with two inference threads.
+Thus N active sources can request roughly 2N inference threads, plus audio
+capture threads and ffmpeg processes. A bounded classifier worker pool may
+help larger installations if CPU contention is measured; sharing an
+interpreter directly across workers would require synchronization.
 
 ```
 bark_detector/           the application (Python package)
