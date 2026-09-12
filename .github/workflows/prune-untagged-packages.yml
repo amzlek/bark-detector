@@ -1,0 +1,66 @@
+name: One-time GHCR untagged version cleanup
+
+on:
+  workflow_dispatch:
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: publish-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Set up buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete untagged, unreferenced package versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          owner_type=$(gh api "users/${GITHUB_REPOSITORY_OWNER}" --jq .type)
+          package_name=${GITHUB_REPOSITORY#*/}
+          if [ "$owner_type" = Organization ]; then
+            versions_api="orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/${package_name}/versions"
+          else
+            versions_api="users/${GITHUB_REPOSITORY_OWNER}/packages/container/${package_name}/versions"
+          fi
+
+          gh api --paginate "$versions_api?per_page=100" \
+            --jq '.[] | {id, name, tags: (.metadata.container.tags // [])}' \
+            | jq -s '.' > "$RUNNER_TEMP/package-versions.json"
+
+          # Platform and attestation manifests often have no tag of their
+          # own but are required by a tagged multi-arch image. Preserve them.
+          : > "$RUNNER_TEMP/tagged-children"
+          while IFS= read -r tag; do
+            docker buildx imagetools inspect --raw \
+              "ghcr.io/${GITHUB_REPOSITORY,,}:$tag" \
+              | jq -r '.manifests[]?.digest' >> "$RUNNER_TEMP/tagged-children"
+          done < <(jq -r '[.[].tags[]] | unique[]' "$RUNNER_TEMP/package-versions.json")
+
+          jq -c '.[] | select((.tags | length) == 0)' \
+            "$RUNNER_TEMP/package-versions.json" | while IFS= read -r version; do
+            version_id=$(jq -r '.id' <<< "$version")
+            digest=$(jq -r '.name' <<< "$version")
+            if grep -Fxq "$digest" "$RUNNER_TEMP/tagged-children"; then
+              echo "Keeping referenced manifest $version_id ($digest)."
+              continue
+            fi
+            # Recheck tags immediately before deleting in case another
+            # workflow published or moved a tag since the initial listing.
+            tag_count=$(gh api "$versions_api/$version_id" --jq '.metadata.container.tags | length')
+            if [ "$tag_count" = 0 ]; then
+              gh api -X DELETE "$versions_api/$version_id"
+              echo "Deleted untagged package version $version_id ($digest)."
+            fi
+          done
