@@ -101,9 +101,10 @@ dl.stats dd { margin: 0; font-variant-numeric: tabular-nums; }
   .sources-table td:nth-child(2)::before { content: 'Type'; }
   .sources-table td:nth-child(3)::before { content: 'Path'; }
   .sources-table td:nth-child(4)::before { content: 'Listen'; }
-  .sources-table td:nth-child(5)::before { content: 'Threshold'; }
-  .sources-table td:nth-child(6)::before { content: 'Status'; }
-  .sources-table td:nth-child(7)::before { content: 'Actions'; }
+  .sources-table td:nth-child(5)::before { content: 'Detect'; }
+  .sources-table td:nth-child(6)::before { content: 'Notify'; }
+  .sources-table td:nth-child(7)::before { content: 'Status'; }
+  .sources-table td:nth-child(8)::before { content: 'Actions'; }
   .responsive-table audio { width: 100%; max-width: 100%; }
   .row-actions { align-items: start; }
 

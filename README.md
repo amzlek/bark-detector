@@ -17,8 +17,10 @@ dependency on Frigate's video/recording/app framework.
   microphone (untested), or an ESPHome device like an M5 Atom Echo streaming
   raw PCM over a bespoke TCP protocol (see `esphome/`).
 - **Configurable detection** per source: which labels to listen for,
-  per-label thresholds, minimum volume gate, and pre/post-capture window for
-  the saved snippet.
+  per-label detection thresholds (save a clip) and notify thresholds (publish
+  MQTT), minimum volume gate, and pre/post-capture window. Notify must be at
+  least as high as detection. Existing `thresholds` settings are treated as
+  notify thresholds, with detection defaulting to the same value.
 - **MQTT**:
   - a message per detection (label, score, timestamp, snippet path)
   - a retained connect/disconnect status message per source (based on audio
@@ -145,7 +147,7 @@ Topics are all derived from a single configurable prefix, `mqtt.topic`
 | `bark_detector/{source}/status`        | a source connects/disconnects          | yes      |
 | `bark_detector/system/{event}`         | e.g. `space_limit_reached` on cleanup  | no       |
 
-A detection produces **two** messages, seconds apart, sharing the same
+A capture that reaches the notify threshold produces **two** messages, seconds apart, sharing the same
 `id` so a subscriber can correlate them - `triggered` fires immediately
 (for automations that need to react fast, before any audio has been
 recorded), `event` follows once the snippet is actually saved to disk:

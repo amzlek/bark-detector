@@ -6,11 +6,16 @@ listen:
 - bow-wow
 - howl
 - yip
-thresholds:
+notify_thresholds:
   bark: 0.8
   bow-wow: 0.8
   howl: 0.8
   yip: 0.8
+detection_thresholds:
+  bark: 0.6
+  bow-wow: 0.6
+  howl: 0.6
+  yip: 0.6
 min_volume: 500.0
 pre_capture: 5.0
 post_capture: 5.0

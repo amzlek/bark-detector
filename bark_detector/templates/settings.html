@@ -20,7 +20,7 @@
 <h2>Sources</h2>
 <table class="responsive-table sources-table">
   <thead>
-    <tr><th>Name</th><th>Type</th><th>Path</th><th>Listen</th><th>Threshold</th><th>Status</th><th></th></tr>
+    <tr><th>Name</th><th>Type</th><th>Path</th><th>Listen</th><th>Detect</th><th>Notify</th><th>Status</th><th></th></tr>
   </thead>
   <tbody id="sources"></tbody>
 </table>
@@ -48,8 +48,11 @@
   <label for="src-listen">Listen for (comma-separated)</label>
   <input id="src-listen" value="bark, bow-wow, howl, yip">
 
-  <label for="src-threshold">Detection threshold</label>
-  <input id="src-threshold" type="number" min="0" max="1" step="0.01" value="0.8">
+  <label for="src-detection-threshold">Detection threshold (save file)</label>
+  <input id="src-detection-threshold" type="number" min="0.01" max="1" step="0.01" value="0.8" required>
+
+  <label for="src-notify-threshold">Notify threshold (MQTT)</label>
+  <input id="src-notify-threshold" type="number" min="0.01" max="1" step="0.01" value="0.8" required>
 
   <label for="src-min-volume">Min volume (RMS)</label>
   <input id="src-min-volume" type="number" min="0" step="1" value="500">
@@ -133,7 +136,8 @@ function resetSourceForm() {
   sourceForm.reset();
   document.getElementById('src-original-name').value = '';
   document.getElementById('src-listen').value = 'bark, bow-wow, howl, yip';
-  document.getElementById('src-threshold').value = '0.8';
+  document.getElementById('src-detection-threshold').value = '0.8';
+  document.getElementById('src-notify-threshold').value = '0.8';
   document.getElementById('src-min-volume').value = '500';
   document.getElementById('src-pre').value = '5';
   document.getElementById('src-post').value = '5';
@@ -148,8 +152,11 @@ function fillSourceForm(source) {
   document.getElementById('src-type').value = source.type;
   document.getElementById('src-path').value = source.path;
   document.getElementById('src-listen').value = source.listen.join(', ');
-  const thresholds = Object.values(source.thresholds || {});
-  document.getElementById('src-threshold').value = thresholds.length ? thresholds[0] : 0.8;
+  const notifyThresholds = source.notify_thresholds || source.thresholds || {};
+  const notify = Object.values(notifyThresholds)[0] ?? 0.8;
+  document.getElementById('src-notify-threshold').value = notify;
+  document.getElementById('src-detection-threshold').value =
+    Object.values(source.detection_thresholds || {})[0] ?? notify;
   document.getElementById('src-min-volume').value = source.min_volume;
   document.getElementById('src-pre').value = source.pre_capture;
   document.getElementById('src-post').value = source.post_capture;
@@ -170,14 +177,16 @@ async function loadSources() {
 
   for (const source of sources) {
     const tr = document.createElement('tr');
-    const threshold = Object.values(source.thresholds || {})[0] ?? '-';
+    const notify = Object.values(source.notify_thresholds || source.thresholds || {})[0] ?? 0.8;
+    const detection = Object.values(source.detection_thresholds || {})[0] ?? notify;
     const status = source.status || 'connecting';
     tr.innerHTML = `
       <td>${source.name}</td>
       <td>${source.type}</td>
       <td>${source.path}</td>
       <td>${source.listen.join(', ')}</td>
-      <td>${threshold}</td>
+      <td>${detection}</td>
+      <td>${notify}</td>
       <td><span class="badge ${status}">${status}</span></td>
       <td class="row-actions">
         <div class="action-buttons">
@@ -205,16 +214,26 @@ sourceForm.addEventListener('submit', async (e) => {
   const originalName = document.getElementById('src-original-name').value;
   const listen = document.getElementById('src-listen').value
     .split(',').map(s => s.trim()).filter(Boolean);
-  const threshold = parseFloat(document.getElementById('src-threshold').value);
-  const thresholds = {};
-  for (const label of listen) thresholds[label] = threshold;
+  const detectionThreshold = parseFloat(document.getElementById('src-detection-threshold').value);
+  const notifyThreshold = parseFloat(document.getElementById('src-notify-threshold').value);
+  if (notifyThreshold < detectionThreshold) {
+    showStatus(sourceStatus, 'Notify threshold must be at least the detection threshold.', false);
+    return;
+  }
+  const detectionThresholds = {};
+  const notifyThresholds = {};
+  for (const label of listen) {
+    detectionThresholds[label] = detectionThreshold;
+    notifyThresholds[label] = notifyThreshold;
+  }
 
   const body = {
     name: document.getElementById('src-name').value.trim(),
     type: document.getElementById('src-type').value,
     path: document.getElementById('src-path').value.trim(),
     listen,
-    thresholds,
+    detection_thresholds: detectionThresholds,
+    notify_thresholds: notifyThresholds,
     min_volume: parseFloat(document.getElementById('src-min-volume').value),
     pre_capture: parseFloat(document.getElementById('src-pre').value),
     post_capture: parseFloat(document.getElementById('src-post').value),

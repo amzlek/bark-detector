@@ -150,7 +150,8 @@ class SourceConfig:
     type: str
     path: str
     listen: list[str] = field(default_factory=lambda: list(DEFAULT_LISTEN))
-    thresholds: dict[str, float] = field(default_factory=dict)
+    detection_thresholds: dict[str, float] = field(default_factory=dict)
+    notify_thresholds: dict[str, float] = field(default_factory=dict)
     min_volume: float = DEFAULT_MIN_VOLUME
     pre_capture: float = DEFAULT_PRE_CAPTURE
     post_capture: float = DEFAULT_POST_CAPTURE
@@ -164,8 +165,11 @@ class SourceConfig:
     # existing HA entity instead of creating a duplicate.
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
-    def threshold_for(self, label: str) -> float:
-        return self.thresholds.get(label, DEFAULT_THRESHOLD)
+    def detection_threshold_for(self, label: str) -> float:
+        return self.detection_thresholds.get(label, self.notify_threshold_for(label))
+
+    def notify_threshold_for(self, label: str) -> float:
+        return self.notify_thresholds.get(label, DEFAULT_THRESHOLD)
 
 
 @dataclass
@@ -270,12 +274,33 @@ def build_source_config(raw: dict, defaults: dict | None = None) -> SourceConfig
     # SourceConfig's default_factory mint a fresh one for a brand new source
     id_kwargs: dict[str, str] = {"id": raw["id"]} if raw.get("id") else {}
 
+    notify_thresholds = raw.get(
+        "notify_thresholds", raw.get("thresholds", defaults.get("notify_thresholds", defaults.get("thresholds", {})))
+    )
+    detection_thresholds = raw.get("detection_thresholds", defaults.get("detection_thresholds", {}))
+    if not isinstance(notify_thresholds, dict) or not isinstance(detection_thresholds, dict):
+        raise ConfigError(f"source '{name}' thresholds must be label-to-score mappings")
+    try:
+        notify_thresholds = {label: float(value) for label, value in notify_thresholds.items()}
+        detection_thresholds = {label: float(value) for label, value in detection_thresholds.items()}
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"source '{name}' thresholds must be numeric") from exc
+    listen = raw.get("listen", defaults.get("listen", list(DEFAULT_LISTEN)))
+    for label in listen:
+        notify = notify_thresholds.get(label, DEFAULT_THRESHOLD)
+        detection = detection_thresholds.get(label, notify)
+        if not (0 < detection <= notify <= 1):
+            raise ConfigError(
+                f"source '{name}' label '{label}' needs 0 < detection threshold <= notify threshold <= 1"
+            )
+
     return SourceConfig(
         name=name,
         type=source_type,
         path=raw["path"],
-        listen=raw.get("listen", defaults.get("listen", list(DEFAULT_LISTEN))),
-        thresholds=raw.get("thresholds", defaults.get("thresholds", {})),
+        listen=listen,
+        detection_thresholds=detection_thresholds,
+        notify_thresholds=notify_thresholds,
         min_volume=float(
             raw.get("min_volume", defaults.get("min_volume", DEFAULT_MIN_VOLUME))
         ),
@@ -559,7 +584,8 @@ def _dump_source(source: SourceConfig) -> dict:
         "type": source.type,
         "path": source.path,
         "listen": source.listen,
-        "thresholds": source.thresholds,
+        "detection_thresholds": source.detection_thresholds,
+        "notify_thresholds": source.notify_thresholds,
         "min_volume": source.min_volume,
         "pre_capture": source.pre_capture,
         "post_capture": source.post_capture,

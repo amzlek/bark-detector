@@ -40,6 +40,7 @@ class DetectionEvent:
     timestamp: float
     file: str
     duration: float
+    notified: bool = False
 
 
 @dataclass
@@ -51,6 +52,7 @@ class _ActiveCapture:
     pre_chunks: list[bytes]
     post_chunks: list[bytes] = field(default_factory=list)
     chunks_remaining: int = 0
+    notified: bool = False
 
 
 class SnippetRecorder:
@@ -72,14 +74,13 @@ class SnippetRecorder:
     def is_capturing(self) -> bool:
         return self.active is not None
 
+    @property
+    def active_label(self) -> str | None:
+        return self.active.label if self.active is not None else None
+
     def trigger(self, label: str, score: float) -> Optional[DetectionTrigger]:
-        """Start (or extend, if already capturing) a snippet capture.
-        Returns a DetectionTrigger only when a NEW capture starts - the id/
-        label/timestamp minted here are carried through unchanged to the
-        DetectionEvent add_chunk() eventually returns, so a subscriber can
-        correlate the two. Extending an already-active capture (the bark
-        continues) returns None: one 'triggered' message per capture, not
-        one per chunk."""
+        """Start or extend a capture at the detection threshold.
+        The worker calls notify() separately if the notify threshold is met."""
         now = time.time()
         if self.active is None:
             trigger_id = uuid.uuid4().hex
@@ -105,6 +106,20 @@ class SnippetRecorder:
             self.active.chunks_remaining = self.post_chunks_needed
             self.active.score = max(self.active.score, score)
             return None
+
+    def notify(self, label: str, score: float) -> Optional[DetectionTrigger]:
+        """Mark an active capture as notified once, when its label qualifies."""
+        capture = self.active
+        if capture is None or capture.notified or capture.label != label:
+            return None
+        capture.notified = True
+        return DetectionTrigger(
+            id=capture.id,
+            source=self.source_name,
+            label=capture.label,
+            score=score,
+            timestamp=time.time(),
+        )
 
     def add_chunk(self, chunk: bytes) -> Optional[DetectionEvent]:
         """Feed the next PCM chunk in. Always keeps the pre-roll buffer warm;
@@ -155,4 +170,5 @@ class SnippetRecorder:
             timestamp=capture.timestamp,
             file=filepath,
             duration=duration,
+            notified=capture.notified,
         )

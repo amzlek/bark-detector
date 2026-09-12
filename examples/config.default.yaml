@@ -38,5 +38,7 @@
 #   min_volume: 500
 #   pre_capture: 5
 #   post_capture: 5
-#   thresholds:
+#   notify_thresholds:
 #     bark: 0.8
+#   detection_thresholds:
+#     bark: 0.6  # save a clip at 0.6; MQTT only at 0.8

@@ -80,8 +80,6 @@ class AudioTfl:
 
         detections = np.zeros((20, 2), np.float32)
         for i in range(len(scores)):
-            if scores[i] < AUDIO_MIN_CONFIDENCE or i == 20:
-                break
             detections[i] = [class_ids[i], float(scores[i])]
 
         return detections

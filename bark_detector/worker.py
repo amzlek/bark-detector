@@ -46,6 +46,7 @@ class SourceWorker(threading.Thread):
         # - read by AppController's status watchdog to decide connected vs
         # disconnected; None means never received anything yet
         self.last_chunk_at: Optional[float] = None
+        self._last_near_miss_log: dict[str, float] = {}
 
     def run(self) -> None:
         logger.info("[%s] starting worker (type=%s)", self.source.name, self.source.type)
@@ -66,12 +67,32 @@ class SourceWorker(threading.Thread):
         waveform, rms, _dBFS = pcm_chunk_to_waveform(chunk)
 
         if rms >= self.source.min_volume:
-            for label, score in self.detector.detect(waveform):
+            min_threshold = min(
+                max(0.01, self.source.detection_threshold_for(label) - 0.2)
+                for label in self.source.listen
+            ) if self.source.listen else 1.0
+            for label, score in self.detector.detect(waveform, threshold=min_threshold):
                 if label not in self.source.listen:
                     continue
-                if score < self.source.threshold_for(label):
+                if self.recorder.active_label is not None and label != self.recorder.active_label:
                     continue
-                trigger = self.recorder.trigger(label, score)
+                detection_threshold = self.source.detection_threshold_for(label)
+                if score < detection_threshold:
+                    if score >= max(0.01, detection_threshold - 0.2):
+                        now = time.monotonic()
+                        if now - self._last_near_miss_log.get(label, float('-inf')) >= 60:
+                            logger.info(
+                                "[%s] below detection threshold: label=%s score=%.3f detection=%.3f notify=%.3f rms=%.1f",
+                                self.source.name, label, score, detection_threshold,
+                                self.source.notify_threshold_for(label), rms,
+                            )
+                            self._last_near_miss_log[label] = now
+                    continue
+                self.recorder.trigger(label, score)
+                if score >= self.source.notify_threshold_for(label):
+                    trigger = self.recorder.notify(label, score)
+                else:
+                    trigger = None
                 if trigger is not None:
                     try:
                         self.publisher.publish_trigger(trigger)
@@ -88,7 +109,15 @@ class SourceWorker(threading.Thread):
             except Exception:
                 logger.exception("[%s] failed to store event", self.source.name)
 
-            try:
-                self.publisher.publish_event(event)
-            except Exception:
-                logger.exception("[%s] failed to publish MQTT event", self.source.name)
+            if event.notified:
+                try:
+                    self.publisher.publish_event(event)
+                except Exception:
+                    logger.exception("[%s] failed to publish MQTT event", self.source.name)
+            else:
+                logger.info(
+                    "[%s] saved without MQTT notification: label=%s peak=%.3f detection=%.3f notify=%.3f rms=%.1f",
+                    self.source.name, event.label, event.score,
+                    self.source.detection_threshold_for(event.label),
+                    self.source.notify_threshold_for(event.label), rms,
+                )
