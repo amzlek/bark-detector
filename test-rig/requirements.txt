@@ -1,5 +1,0 @@
-# dev-only deps for download_audioset.py - NOT part of the bark-detector
-# app itself (see ../requirements.txt), kept separate so the app image
-# doesn't carry pandas/yt-dlp
-pandas>=2.0
-yt-dlp>=2024.1

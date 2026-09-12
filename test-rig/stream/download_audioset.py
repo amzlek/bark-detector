@@ -20,8 +20,8 @@ Usage (from the test-rig/ directory):
     python stream/download_audioset.py --bark 15 --negative 15
     python stream/download_audioset.py --out-dir /data --cache-dir /data/.cache
 
-Requires ffmpeg on PATH and the packages in test-rig/requirements.txt
-(pip install -r requirements.txt). Normally run automatically by the
+Requires ffmpeg on PATH and the packages in test-rig/pyproject.toml
+(pip install . from test-rig/). Normally run automatically by the
 stream-publisher container (see entrypoint.sh, in this same directory)
 against a bind-mounted dataset/ - running it directly on the host also
 works, for quick iteration without rebuilding the image.

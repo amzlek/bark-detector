@@ -35,13 +35,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 WORKDIR /app
 
-COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml README.md LICENSE /app/
+COPY bark_detector /app/bark_detector
+RUN pip install --no-cache-dir .
 
 COPY --from=ffmpeg /ffmpeg /usr/local/bin/ffmpeg
 COPY --from=model-fetch /models/cpu_audio_model.tflite /app/cpu_audio_model.tflite
 COPY audio-labelmap.txt /app/audio-labelmap.txt
-COPY bark_detector /app/bark_detector
 
 # safe to boot with nothing mounted at /config: a missing/empty config.yaml
 # or sources dir runs on defaults (zero sources, web UI on, MQTT off until

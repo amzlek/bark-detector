@@ -17,8 +17,8 @@ COPY --from=ffmpeg /ffmpeg /usr/local/bin/ffmpeg
 COPY --from=ffmpeg /ffprobe /usr/local/bin/ffprobe
 
 WORKDIR /app
-COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml /app/pyproject.toml
+RUN pip install --no-cache-dir .
 
 COPY stream/download_audioset.py /app/download_audioset.py
 COPY stream/entrypoint.sh /usr/local/bin/entrypoint.sh

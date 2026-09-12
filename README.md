@@ -52,6 +52,9 @@ Build the image once from the repo root:
 docker build -t bark-detector:latest .
 ```
 
+For a local Python environment, install the app with `pip install .` from
+the repo root. Its dependencies are declared in `pyproject.toml`.
+
 Then pick one of two ready-to-run examples under `examples/` (both just
 reference `image: bark-detector:latest` - neither builds it themselves):
 
@@ -244,7 +247,7 @@ candidates and skips failures until it hits the target count.
 
 Want to fetch a bigger/different set without going through Docker? From
 `test-rig/`:
-`pip install -r requirements.txt && python stream/download_audioset.py --bark 15 --negative 15`
+`pip install . && python stream/download_audioset.py --bark 15 --negative 15`
 (needs `ffmpeg` on PATH).
 
 ## Project layout
@@ -256,9 +259,10 @@ bark_detector/           the application (Python package)
 examples/                ready-to-run docker-compose examples (see Quick start)
   basic/                   sources via the settings UI, minimal env config
   extended/                everything env-driven, sources as YAML files, web UI off
-requirements.txt
+pyproject.toml          application dependencies and package metadata
 Dockerfile
 test-rig/                local end-to-end test rig (mosquitto + mediamtx + publishers)
+  pyproject.toml          dataset downloader dependencies
   dataset/                 fetched test clips - gitignored, not committed
   stream/                  the RTSP test publisher
     download_audioset.py     fetches the labeled test set from AudioSet (see above)
