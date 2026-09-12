@@ -5,6 +5,7 @@ body {
   margin: 2rem auto;
   padding: 0 1rem;
 }
+* { box-sizing: border-box; }
 h1 { font-size: 1.25rem; }
 h2 { font-size: 1rem; margin-top: 2.5rem; }
 nav { display: flex; align-items: center; }
@@ -30,6 +31,7 @@ audio { height: 32px; max-width: 220px; }
 form { display: grid; grid-template-columns: 160px 1fr; gap: 0.6rem; align-items: center; max-width: 480px; margin-top: 1rem; }
 form label { font-size: 0.85rem; opacity: 0.8; }
 form input, form select { padding: 0.35rem; font: inherit; }
+form > input, form > select, form > div { min-width: 0; }
 #src-path { width: 100%; box-sizing: border-box; }
 .field-hint { font-size: 0.78rem; opacity: 0.65; margin: 0.25rem 0 0; }
 .actions { grid-column: 2; display: flex; gap: 0.5rem; margin-top: 0.25rem; }
@@ -37,6 +39,7 @@ button { padding: 0.4rem 0.9rem; cursor: pointer; }
 button.secondary { background: none; }
 button.danger { color: #c0392b; }
 .row-actions button { font-size: 0.8rem; padding: 0.2rem 0.5rem; }
+.action-buttons { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .empty { opacity: 0.6; padding: 1rem 0; }
 .score { font-variant-numeric: tabular-nums; }
 .status { font-size: 0.85rem; margin-top: 0.5rem; min-height: 1.2em; }
@@ -51,3 +54,63 @@ button.danger { color: #c0392b; }
 dl.stats { display: grid; grid-template-columns: auto 1fr; gap: 0.3rem 1rem; max-width: 420px; }
 dl.stats dt { opacity: 0.7; }
 dl.stats dd { margin: 0; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 600px) {
+  body { margin: 1rem auto; }
+  nav { flex-wrap: wrap; gap: 0.5rem 1rem; }
+  nav a { margin-right: 0; }
+  nav .gh-link span { display: none; }
+  h2 { margin-top: 2rem; }
+
+  .responsive-table, .responsive-table tbody, .responsive-table tr,
+  .responsive-table td { display: block; width: 100%; }
+  .responsive-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .responsive-table tr {
+    margin: 0.75rem 0;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid #8884;
+    border-radius: 0.5rem;
+  }
+  .responsive-table td {
+    display: grid;
+    grid-template-columns: minmax(5.5rem, 35%) minmax(0, 1fr);
+    gap: 0.5rem;
+    padding: 0.4rem 0;
+    border: 0;
+    overflow-wrap: anywhere;
+  }
+  .responsive-table td::before {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    opacity: 0.7;
+  }
+  .events-table td:nth-child(1)::before { content: 'Time'; }
+  .events-table td:nth-child(2)::before { content: 'Source'; }
+  .events-table td:nth-child(3)::before { content: 'Label'; }
+  .events-table td:nth-child(4)::before { content: 'Score'; }
+  .events-table td:nth-child(5)::before { content: 'Snippet'; }
+  .sources-table td:nth-child(1)::before { content: 'Name'; }
+  .sources-table td:nth-child(2)::before { content: 'Type'; }
+  .sources-table td:nth-child(3)::before { content: 'Path'; }
+  .sources-table td:nth-child(4)::before { content: 'Listen'; }
+  .sources-table td:nth-child(5)::before { content: 'Threshold'; }
+  .sources-table td:nth-child(6)::before { content: 'Status'; }
+  .sources-table td:nth-child(7)::before { content: 'Actions'; }
+  .responsive-table audio { width: 100%; max-width: 100%; }
+  .row-actions { align-items: start; }
+
+  form { grid-template-columns: minmax(0, 1fr); max-width: none; }
+  form label { margin-top: 0.35rem; }
+  form input:not([type='checkbox']), form select { width: 100%; }
+  .actions { grid-column: 1; flex-wrap: wrap; }
+  button { min-height: 2.75rem; }
+  dl.stats { grid-template-columns: minmax(0, 1fr) auto; }
+}

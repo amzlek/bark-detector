@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bark Detector - Event Log</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐶</text></svg>">
 <link rel="stylesheet" href="/style.css">
@@ -23,7 +24,7 @@
 </ul>
 
 <h2>Recent detections</h2>
-<table>
+<table class="responsive-table events-table">
   <thead>
     <tr><th>Time</th><th>Source</th><th>Label</th><th>Score</th><th>Snippet</th></tr>
   </thead>
@@ -31,9 +32,6 @@
 </table>
 <p id="empty" class="empty" hidden>No detections yet.</p>
 
-<script>
-  window.WS_TOKEN = {{ ws_token | tojson }};
-</script>
 <script src="/ws-client.js"></script>
 <script>
 async function loadEvents() {

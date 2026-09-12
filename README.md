@@ -33,12 +33,8 @@ dependency on Frigate's video/recording/app framework.
     broker settings, and a small storage panel (recordings / space used /
     space available)
   - live status and all settings CRUD (add/edit/delete source, update MQTT)
-    go over a websocket at `/ws`, gated by an auth token the app generates
-    itself the first time it boots and writes to its own file (see
-    `AUTH_TOKEN_PATH` below) - not a setting, so it's not in config.yaml
-    and can't be set via env var. Everything else - `/api/events`,
-    `/api/sources` (read-only), `/api/stats`, `/snippets/*` - stays plain,
-    unauthenticated HTTP
+    go over an unauthenticated websocket at `/ws`. The HTTP endpoints are
+    unauthenticated as well, so expose the UI only on a trusted network.
 - **Automatic retention**: age- and space-based cleanup of saved snippets,
   checked on an interval.
 - **Minimal image**: `python:3.14-slim` + a static ffmpeg binary (no apt
@@ -76,8 +72,7 @@ settings UI and add a source, MQTT stays off until you turn it on.
 
 - Event log / settings UI: http://localhost:8099 (unless disabled)
 - Saved snippets and the event log db land in the bind-mounted snippets volume
-- Config is split three ways, so nothing gets mixed up between "a setting"
-  and "generated state":
+- Config is split between app settings and source files:
   - `config.yaml` (`CONFIG_PATH`, default `/config/config.yaml`) - app
     settings (`mqtt`, `web`, `cleanup`, `source_defaults`, `snippet_dir`,
     `ffmpeg_path`, `log_level`). Fully optional - every field can also come
@@ -94,13 +89,6 @@ settings UI and add a source, MQTT stays off until you turn it on.
     per source, created/updated/deleted by the settings UI. This one does
     need somewhere to live, since sources aren't env-var configurable
     (there's no clean way to express a dynamic list of them that way).
-  - `auth_token` (`AUTH_TOKEN_PATH`, default `/config/auth_token`) - the
-    websocket's auth secret. Generated once on first boot and written to
-    its own file (not config.yaml, since it isn't a "setting" with a
-    default to compare against); every later boot just reads it back.
-    Losing this file just means a new token gets generated - any browser
-    tab open at the time needs a manual reload to pick it up (its
-    websocket keeps retrying with the now-stale token otherwise).
 
 ### Optional Environment overrides
 If the ENV is set, it will override and replace the value in the config.yaml
@@ -140,7 +128,6 @@ If the ENV is set, it will override and replace the value in the config.yaml
 |---|---|---|
 | `CONFIG_PATH` | `/config/config.yaml` | app config file (see above) |
 | `SOURCES_DIR` | `/config/sources` | directory holding one *.yaml file per source |
-| `AUTH_TOKEN_PATH` | `/config/auth_token` | websocket auth secret, generated on first boot |
 | `SNIPPET_DIR` | `/media/bark_snippets` | folder to save snippets |
 | `LOG_LEVEL` | `INFO` | log level (INFO/WARN/ERROR), parsed at startup|
 

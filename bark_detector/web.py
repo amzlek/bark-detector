@@ -13,12 +13,10 @@ Routes:
   GET  /snippets/<filename>   -> the saved WAV file for a detection
   GET  /api/sources           -> list configured sources (with live status)
   GET  /api/stats             -> recordings count + disk usage
-  WS   /ws?token=...          -> everything else: settings CRUD (add/edit/
+  WS   /ws                    -> everything else: settings CRUD (add/edit/
                                   delete source, update MQTT) as request/
                                   response messages, plus server-pushed
-                                  source/MQTT status. Requires web.auth_token
-                                  (rendered into the page by / and /settings,
-                                  so a third-party origin can't obtain it).
+                                  source/MQTT status.
 
 Settings CRUD used to be POST/PUT/DELETE on /api/sources and /api/mqtt;
 those routes are gone now that the websocket is the only way to mutate
@@ -29,7 +27,6 @@ read-only endpoints remain public HTTP.
 from __future__ import annotations
 
 import dataclasses
-import hmac
 import json
 import logging
 import os
@@ -62,11 +59,11 @@ def create_app(controller: AppController) -> Flask:
 
     @app.get("/")
     def index():
-        return render_template("index.html", ws_token=controller.config.web.auth_token)
+        return render_template("index.html")
 
     @app.get("/settings")
     def settings_page():
-        return render_template("settings.html", ws_token=controller.config.web.auth_token)
+        return render_template("settings.html")
 
     @app.get("/ws-client.js")
     def ws_client_js():
@@ -122,13 +119,6 @@ def create_app(controller: AppController) -> Flask:
 
     @sock.route("/ws")
     def ws_endpoint(ws):
-        token = request.args.get("token", "")
-        expected = controller.config.web.auth_token
-        if not expected or not hmac.compare_digest(token, expected):
-            logger.warning("rejected websocket connection: bad or missing token")
-            ws.close(reason=4401, message="unauthorized")
-            return
-
         _serve_ws_client(controller, ws)
 
     return app

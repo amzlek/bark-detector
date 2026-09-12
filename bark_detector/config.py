@@ -6,7 +6,6 @@ import contextlib
 import logging
 import os
 import re
-import secrets
 import tempfile
 import uuid
 from dataclasses import dataclass, field
@@ -174,16 +173,6 @@ class WebConfig:
     enabled: bool = True
     host: str = "0.0.0.0"
     port: int = 8099
-    # generated once and stored in its own file (see load_auth_token/
-    # save_auth_token), NOT in config.yaml - it doesn't have a meaningful
-    # "default" to compare against for the non-default-only persistence
-    # model the rest of this module uses (see _persisted_value), and it
-    # needs to persist regardless of whether any other setting does.
-    # Gates the websocket (settings CRUD + live status); the browser only
-    # learns it because index.html/settings.html render it in server-side,
-    # so a third-party page can't open a websocket to us even though the
-    # plain GET routes stay open.
-    auth_token: str = ""
 
 
 @dataclass
@@ -215,12 +204,6 @@ class Config:
     log_level: str = "INFO"
     web: WebConfig = field(default_factory=WebConfig)
     cleanup: CleanupConfig = field(default_factory=CleanupConfig)
-    # where load_auth_token()/save_auth_token() read/write the websocket
-    # secret - resolved with the same file > env > default precedence as
-    # sources_dir, and kept as a field for the same reason: main.py needs
-    # the final resolved value (to know where to persist a freshly-
-    # generated token) without re-deriving it itself.
-    auth_token_path: str = "/config/auth_token"
 
     @property
     def db_path(self) -> str:
@@ -307,10 +290,7 @@ def build_source_config(raw: dict, defaults: dict | None = None) -> SourceConfig
     )
 
 
-def _build_web_config(raw: dict, auth_token: str) -> WebConfig:
-    if not auth_token:
-        auth_token = secrets.token_urlsafe(32)
-
+def _build_web_config(raw: dict) -> WebConfig:
     return WebConfig(
         enabled=_env_override(
             "WEB_ENABLED", bool(raw.get("enabled", WebConfig.enabled)), in_file="enabled" in raw
@@ -319,7 +299,6 @@ def _build_web_config(raw: dict, auth_token: str) -> WebConfig:
         port=_env_override(
             "WEB_PORT", int(raw.get("port", WebConfig.port)), in_file="port" in raw
         ),
-        auth_token=auth_token,
     )
 
 
@@ -425,25 +404,9 @@ def _new_source_path(name: str, sources_dir: str) -> str:
     return path
 
 
-def load_auth_token(path: str) -> str:
-    """Pure read - "" if the file doesn't exist yet or is empty. Never
-    writes; see save_auth_token, called explicitly by main.py only the
-    first time (when this returns "")."""
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read().strip()
-    except FileNotFoundError:
-        return ""
-
-
-def save_auth_token(token: str, path: str) -> None:
-    _atomic_write(path, ".auth-token-", lambda f: f.write(token))
-
-
 def load_config(
     config_path: str,
     default_sources_dir: str = Config.sources_dir,
-    default_auth_token_path: str = Config.auth_token_path,
 ) -> Config:
     """Tolerant by design: a missing file, an empty file, or a file missing
     whole sections are all fine - every gap is filled with its default (or
@@ -452,14 +415,12 @@ def load_config(
     name) still raise ConfigError. This function never writes anything -
     safe to call on arbitrary paths (tests, an example file, etc.) without
     side effects. Persisting changes is a separate, explicit step: see
-    save_config/save_source/save_auth_token, all called only when the
-    settings UI actually changes something (or, for the auth token, the
-    first time one needs to be generated) - never automatically just
-    because the app booted.
+    save_config/save_source, called only when the settings UI changes
+    something - never automatically just because the app booted.
 
-    Config is split three ways:
-      - config_path: app settings (mqtt/web/cleanup/sources_dir/
-        auth_token_path/etc) - entirely optional, every field can come
+    Config is split between app settings and source files:
+      - config_path: app settings (mqtt/web/cleanup/sources_dir/etc) -
+        entirely optional, every field can come
         from an env var instead, so a docker deployment can skip mounting
         this file at all. config_path itself can't be one of those fields
         (you'd need to already know it to find the file that would tell
@@ -470,14 +431,6 @@ def load_config(
         dynamic list that way), so they need somewhere to persist to
         regardless; where is configurable, same as everything else
         (SOURCES_DIR / sources_dir: in the file / default_sources_dir).
-      - auth_token_path: the websocket auth secret (see load_auth_token) -
-        split out from the rest of config_path's content because it
-        doesn't fit the "only non-default values are written" model
-        save_config uses (see dump_config): it has no meaningful default,
-        and unlike everything else it must persist even when nothing else
-        does. Where it lives is still configurable the same way
-        (AUTH_TOKEN_PATH / auth_token_path: in the file / the parameter
-        here).
     """
     try:
         with open(config_path, "r", encoding="utf-8") as f:
@@ -487,11 +440,6 @@ def load_config(
 
     sources_dir = _env_override(
         "SOURCES_DIR", raw.get("sources_dir", default_sources_dir), in_file="sources_dir" in raw
-    )
-    auth_token_path = _env_override(
-        "AUTH_TOKEN_PATH",
-        raw.get("auth_token_path", default_auth_token_path),
-        in_file="auth_token_path" in raw,
     )
     source_defaults = raw.get("source_defaults", {})
 
@@ -507,9 +455,8 @@ def load_config(
         log_level=_env_override(
             "LOG_LEVEL", raw.get("log_level", Config.log_level), in_file="log_level" in raw
         ),
-        web=_build_web_config(raw.get("web", {}), load_auth_token(auth_token_path)),
+        web=_build_web_config(raw.get("web", {})),
         cleanup=_build_cleanup_config(raw.get("cleanup", {})),
-        auth_token_path=auth_token_path,
     )
 
 
@@ -542,7 +489,7 @@ def dump_config(config: Config) -> dict:
     of every field, and guarantees a secret sourced from env never gets
     duplicated into it. Sources themselves aren't included here - each is
     its own file under sources_dir (see save_source) - but where
-    sources_dir/auth_token_path point IS included, same as any other
+    sources_dir points IS included, same as any other
     setting, so a hand-set value survives an unrelated save (e.g. the
     settings UI saving MQTT config) instead of silently reverting."""
     default_mqtt = MqttConfig()
@@ -574,9 +521,6 @@ def dump_config(config: Config) -> dict:
             }
         ),
         "sources_dir": _persisted_value(config.sources_dir, Config.sources_dir, "SOURCES_DIR"),
-        "auth_token_path": _persisted_value(
-            config.auth_token_path, Config.auth_token_path, "AUTH_TOKEN_PATH"
-        ),
         "source_defaults": config.source_defaults,
         "snippet_dir": _persisted_value(config.snippet_dir, Config.snippet_dir, "SNIPPET_DIR"),
         "ffmpeg_path": _persisted_value(config.ffmpeg_path, Config.ffmpeg_path, None),
@@ -646,7 +590,7 @@ def _atomic_write_yaml(data: dict, path: str, prefix: str) -> None:
 
 def save_config(config: Config, path: str) -> None:
     """Write the app-level config back to disk atomically. Does not touch
-    sources_dir or the auth token file - see dump_config()."""
+    sources_dir - see dump_config()."""
     _atomic_write_yaml(dump_config(config), path, ".config-")
 
 

@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bark Detector - Settings</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐶</text></svg>">
 <link rel="stylesheet" href="/style.css">
@@ -17,7 +18,7 @@
 <h1>Bark Detector - Settings</h1>
 
 <h2>Sources</h2>
-<table>
+<table class="responsive-table sources-table">
   <thead>
     <tr><th>Name</th><th>Type</th><th>Path</th><th>Listen</th><th>Threshold</th><th>Status</th><th></th></tr>
   </thead>
@@ -103,9 +104,6 @@
   <dt>Space available on disk</dt><dd id="stat-available">-</dd>
 </dl>
 
-<script>
-  window.WS_TOKEN = {{ ws_token | tojson }};
-</script>
 <script src="/ws-client.js"></script>
 <script>
 const sourceForm = document.getElementById('source-form');
@@ -182,8 +180,10 @@ async function loadSources() {
       <td>${threshold}</td>
       <td><span class="badge ${status}">${status}</span></td>
       <td class="row-actions">
-        <button type="button" data-action="edit">Edit</button>
-        <button type="button" data-action="delete" class="danger">Delete</button>
+        <div class="action-buttons">
+          <button type="button" data-action="edit">Edit</button>
+          <button type="button" data-action="delete" class="danger">Delete</button>
+        </div>
       </td>
     `;
     tr.querySelector('[data-action="edit"]').onclick = () => fillSourceForm(source);

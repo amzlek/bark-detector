@@ -1,7 +1,5 @@
 // Shared websocket client for both index.html and settings.html. Loaded via
-// GET /ws-client.js; expects window.WS_TOKEN to already be set by the page
-// (rendered in server-side by web.py, see templates/*.html) before connect()
-// is called.
+// GET /ws-client.js.
 window.BarkWs = (function () {
   let ws = null;
   let nextId = 1;
@@ -19,7 +17,6 @@ window.BarkWs = (function () {
   function connect() {
     const url = new URL('/ws', location.href);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-    url.searchParams.set('token', window.WS_TOKEN || '');
     ws = new WebSocket(url);
 
     ws.onopen = () => emit('open');
